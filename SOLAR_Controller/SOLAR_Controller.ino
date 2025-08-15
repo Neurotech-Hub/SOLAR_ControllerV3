@@ -6,7 +6,7 @@
 #include <INA226.h>
 
 // Version tracking
-const String CODE_VERSION = "1.000";
+const String CODE_VERSION = "1.001";
 
 // Pin assignments for ItsyBitsy M4
 const int dacPin = A0;          // DAC output (12-bit, 0-4095)
@@ -784,6 +784,11 @@ void updateCurrentControl()
 
         currentDacValue += (currentMA < targetCurrentMA) ? 1 : -1;
         currentDacValue = constrain(currentDacValue, dacMin, dacMax);
+        // Check for voltage drop
+        if (voltageV < 4.85) {
+            Serial.println("EMERGENCY: Voltage drop detected! " + String(voltageV, 3) + " V");
+            emergencyShutdown();
+        }
         analogWrite(dacPin, currentDacValue);
         digitalWrite(userLedPin, currentMA > 0 ? HIGH : LOW);
     }
@@ -823,12 +828,6 @@ void safetyCheck()
     // Check for overcurrent
     if (currentMA > SAFETY_SHUTDOWN_MA) {
         Serial.println("EMERGENCY: Overcurrent detected! " + String(currentMA) + " mA");
-        emergencyShutdown();
-    }
-    
-    // Check for voltage drop
-    if (voltageV < 4.85) {
-        Serial.println("EMERGENCY: Voltage drop detected! " + String(voltageV, 3) + " V");
         emergencyShutdown();
     }
     
