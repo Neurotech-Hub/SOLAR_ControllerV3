@@ -19,22 +19,14 @@ const int userLedPin = 2;      // User LED
 
 // INA226 Configuration
 INA226 ina226(0x4A);  // Default I2C address
-const float SHUNT_RESISTANCE = 0.04195;  // 58mΩ shunt for 1.4A max
+const float SHUNT_RESISTANCE = 0.04195;  // 41.95mΩ shunt for 1.5A max
 const float MAX_CURRENT_MA = 1500.0;   // Maximum current in mA
 const float MIN_CURRENT_MA = 0.0;      // Minimum current in mA
 const float SAFETY_SHUTDOWN_MA = 1350.0; // Safety shutdown threshold
 
-// Current Control Parameters (optimized from INA226_Test)
-const float KP = 0.1;           // Proportional gain (conservative)
-const float KI = 0.01;          // Integral gain (small to prevent oscillations)
-const float KD = 0.001;         // Derivative gain (minimal)
-const int CONTROL_RATE_MS = 100; // Control loop rate (10Hz)
-const int MIN_DAC_ADJUSTMENT = 1; // Minimum DAC adjustment
-const int MAX_DAC_STEP = 50;    // Maximum DAC change per cycle (prevents oscillations)
-
-// Ramping Parameters
-const float RAMP_RATE_MA_PER_SEC = 100.0; // Current ramp rate
-const int RAMP_UPDATE_MS = 50;  // Ramp update rate (20Hz)
+// Current Control Parameters (simple)
+const int dacMin = 0;            // Minimum DAC value
+const int dacMax = 4095;         // Maximum DAC value
 
 // Command structure
 struct Command
@@ -58,7 +50,6 @@ enum DeviceState
 enum CurrentControlState
 {
     CURRENT_OFF,       // Current control disabled
-    CURRENT_RAMPING,   // Ramping to target
     CURRENT_STABLE,    // At target, maintaining
     CURRENT_ERROR      // Error condition
 };
@@ -83,24 +74,14 @@ float powerMW = 0.0;
 float shuntVoltageMV = 0.0;
 int currentDacValue = 0;
 int targetDacValue = 0;
-bool currentControlEnabled = false;
 
-// PID Control variables
-float integralError = 0.0;
-float lastError = 0.0;
-unsigned long lastControlTime = 0;
-unsigned long lastRampTime = 0;
-
-// Ramping variables
-float rampTargetMA = 0.0;
-float rampStartMA = 0.0;
-unsigned long rampStartTime = 0;
-bool ramping = false;
+// Timing variables
+unsigned long startTime = 0;
+unsigned long endTime = 0;
+unsigned long readTime = 0;
 
 // Safety and monitoring
 unsigned long lastMeasurementTime = 0;
-int consecutiveErrors = 0;
-const int MAX_CONSECUTIVE_ERRORS = 5;
 
 // Function declarations
 void updateServo();
@@ -117,7 +98,7 @@ void updateCurrentControl();
 void setTargetCurrent(float currentMA);
 void measureCurrent();
 void displayCurrentStatus();
-void updateRamping();
+
 void safetyCheck();
 void emergencyShutdown();
 
@@ -138,9 +119,15 @@ void setup()
     myServo.attach(servoPin);
     myServo.write(90);
 
-    // Initialize DAC
+    // Initialize DAC - always start with 0 for safety
     analogWriteResolution(12);  // Set 12-bit resolution for ItsyBitsy M4
     analogWrite(dacPin, 0);     // Start with DAC off
+    
+    // Reset all control variables to safe state
+    currentDacValue = 0;
+    targetDacValue = 0;
+    targetCurrentMA = 0.0;
+    currentControlState = CURRENT_OFF;
 
     // Initialize I2C and INA226
     Wire.begin();
@@ -204,11 +191,10 @@ void loop()
     // Safety check
     safetyCheck();
 
-    // Update current control if enabled
-    if (currentControlEnabled && ina226Initialized)
+    // Update current control if INA226 is initialized
+    if (ina226Initialized)
     {
         updateCurrentControl();
-        updateRamping();
     }
 
     // If rxReady is LOW, chain is broken
@@ -224,6 +210,8 @@ void loop()
                 Serial.println("DEBUG: Attempting to re-establish chain...");
                 pendingCommand = ""; // Clear any pending command
             }
+            // Safety: Turn off DAC
+            analogWrite(dacPin, 0);
             // Reset device state
             myDeviceId = isMasterDevice ? 1 : 0;
             totalDevices = 0;
@@ -256,7 +244,7 @@ void loop()
                 reinitializeDevices();
                 return;
             }
-            else if (command == "current")
+            else if (command == "current" || command == "c")
             {
                 if (ina226Initialized) {
                     measureCurrent();
@@ -266,7 +254,7 @@ void loop()
                 }
                 return;
             }
-            else if (command == "emergency")
+            else if (command == "emergency" || command == "e")
             {
                 emergencyShutdown();
                 return;
@@ -440,15 +428,17 @@ void processCommand(String data)
                 Serial.println("SRV:" + String(myDeviceId) + ":" + String(angle));
             }
         }
-        // Handle current command (closed-loop control with ramping)
+        // Handle current command (closed-loop control)
         else if (cmd.command == "current")
         {
             float current = cmd.value.toFloat();
             current = constrain(current, MIN_CURRENT_MA, MAX_CURRENT_MA);
             setTargetCurrent(current);
+            digitalWrite(userLedPin, current > 0 ? HIGH : LOW);
             if (Serial)
             {
                 Serial.println("CUR:" + String(myDeviceId) + ":" + String(current));
+                Serial.println("DEBUG: Target current: " + String(targetCurrentMA) + " mA");
             }
         }
         // Handle DAC command (direct control)
@@ -459,7 +449,7 @@ void processCommand(String data)
             targetDacValue = value;
             currentDacValue = value;
             analogWrite(dacPin, value);
-            currentControlEnabled = false; // Disable current control when using direct DAC
+            targetCurrentMA = 0.0; // Disable current control by setting target to 0
             currentControlState = CURRENT_OFF;
             digitalWrite(userLedPin, value > 1200 ? HIGH : LOW);
             if (Serial)
@@ -680,9 +670,7 @@ void printStatus()
             case CURRENT_OFF:
                 controlStateName = "OFF";
                 break;
-            case CURRENT_RAMPING:
-                controlStateName = "RAMPING";
-                break;
+            
             case CURRENT_STABLE:
                 controlStateName = "STABLE";
                 break;
@@ -696,7 +684,6 @@ void printStatus()
         Serial.println("CURRENT_CONTROL:" + controlStateName);
         Serial.println("TARGET_CURRENT:" + String(targetCurrentMA) + "mA");
         Serial.println("CURRENT_DAC:" + String(currentDacValue));
-        Serial.println("RAMPING:" + String(ramping ? "YES" : "NO"));
     }
 }
 
@@ -739,13 +726,13 @@ bool initializeINA226()
     }
 
     // Configure INA226
-    ina226.setAverage(4);  // 16 samples
-    ina226.setBusVoltageConversionTime(4);  // 1.1ms
-    ina226.setShuntVoltageConversionTime(4);  // 1.1ms
-    ina226.setMode(7);  // Continuous shunt and bus measurement
+    ina226.setAverage();  // DEFAULT: 1 sample
+    ina226.setBusVoltageConversionTime();  // 1.1ms
+    ina226.setShuntVoltageConversionTime();  // 1.1ms
+    ina226.setMode();  // Continuous shunt and bus measurement
 
     // Calculate and set calibration
-    int result = ina226.setMaxCurrentShunt(MAX_CURRENT_MA/1000.0, SHUNT_RESISTANCE, true);
+    int result = ina226.setMaxCurrentShunt(MAX_CURRENT_MA/1000.0, SHUNT_RESISTANCE);
     
     if (result != INA226_ERR_NONE) {
         Serial.println("ERROR: Calibration failed with error: 0x" + String(result, HEX));
@@ -762,128 +749,47 @@ bool initializeINA226()
 // Current Control Functions
 void setTargetCurrent(float currentMA)
 {
-    float newTarget = constrain(currentMA, MIN_CURRENT_MA, MAX_CURRENT_MA);
+    targetCurrentMA = constrain(currentMA, MIN_CURRENT_MA, MAX_CURRENT_MA);
     
-    if (newTarget != targetCurrentMA) {
-        // Start ramping if target changed
-        rampStartMA = targetCurrentMA;
-        rampTargetMA = newTarget;
-        rampStartTime = millis();
-        ramping = true;
-        
-        Serial.println("Starting ramp: " + String(rampStartMA) + " -> " + String(rampTargetMA) + " mA");
-    }
-    
-    targetCurrentMA = newTarget;
-    currentControlEnabled = (targetCurrentMA > 0);
-    
-    if (currentControlEnabled) {
-        // Reset PID variables
-        integralError = 0.0;
-        lastError = 0.0;
-        lastControlTime = millis();
-        consecutiveErrors = 0;
-        
-        currentControlState = CURRENT_RAMPING;
-        Serial.println("Current control enabled: " + String(targetCurrentMA) + " mA");
+    if (targetCurrentMA > 0) {
+        currentControlState = CURRENT_STABLE;
+        Serial.println("Current control target set to: " + String(targetCurrentMA) + " mA");
     } else {
-        // Turn off DAC
+        // Turn off DAC but keep control enabled
         targetDacValue = 0;
         currentDacValue = 0;
         analogWrite(dacPin, 0);
         digitalWrite(userLedPin, LOW);
         currentControlState = CURRENT_OFF;
-        ramping = false;
-        Serial.println("Current control disabled");
+        Serial.println("Current control target set to 0 mA (DAC off)");
     }
 }
 
 void updateCurrentControl()
 {
-    unsigned long currentTime = millis();
-    
-    // Run control loop at specified rate
-    if (currentTime - lastControlTime >= CONTROL_RATE_MS) {
-        measureCurrent();
-        
-        // Calculate error
-        float error = targetCurrentMA - currentMA;
-        
-        // PID control with anti-windup and limits
-        integralError += error * (CONTROL_RATE_MS / 1000.0);
-        float derivativeError = (error - lastError) / (CONTROL_RATE_MS / 1000.0);
-        
-        // Anti-windup: limit integral term
-        if (abs(integralError) > 1000) {
-            integralError = (integralError > 0) ? 1000 : -1000;
-        }
-        
-        // Calculate control output
-        float controlOutput = KP * error + KI * integralError + KD * derivativeError;
-        
-        // Convert to DAC adjustment with limits
-        int dacAdjustment = (int)controlOutput;
-        dacAdjustment = constrain(dacAdjustment, -MAX_DAC_STEP, MAX_DAC_STEP);
-        
-        // Apply minimum adjustment threshold
-        if (abs(dacAdjustment) < MIN_DAC_ADJUSTMENT) {
-            dacAdjustment = (dacAdjustment >= 0) ? MIN_DAC_ADJUSTMENT : -MIN_DAC_ADJUSTMENT;
-        }
-        
-        // Update DAC value
-        targetDacValue += dacAdjustment;
-        targetDacValue = constrain(targetDacValue, 0, 4095);
-        
-        // Apply DAC value
-        currentDacValue = targetDacValue;
+    if (!ina226.waitConversionReady())
+    {
+        Serial.println("Timeout waiting for conversion!");
+        return;
+    }
+
+    if (targetCurrentMA > 0)
+    {
+        startTime = micros();
+        shuntVoltageMV = ina226.getShuntVoltage_mV();
+        voltageV = ina226.getBusVoltage();
+        currentMA = ina226.getCurrent_mA();
+        endTime = micros();
+        readTime = endTime - startTime;
+
+        currentDacValue += (currentMA < targetCurrentMA) ? 1 : -1;
+        currentDacValue = constrain(currentDacValue, dacMin, dacMax);
         analogWrite(dacPin, currentDacValue);
-        digitalWrite(userLedPin, currentDacValue > 1200 ? HIGH : LOW);
-        
-        // Update variables for next iteration
-        lastError = error;
-        lastControlTime = currentTime;
-        
-        // Check for stability
-        if (abs(error) < 10.0) { // Within 10mA of target
-            consecutiveErrors = 0;
-            if (!ramping) {
-                currentControlState = CURRENT_STABLE;
-            }
-        } else {
-            consecutiveErrors++;
-            if (consecutiveErrors > MAX_CONSECUTIVE_ERRORS) {
-                currentControlState = CURRENT_ERROR;
-                Serial.println("WARNING: Current control error - " + String(consecutiveErrors) + " consecutive errors");
-            }
-        }
+        digitalWrite(userLedPin, currentMA > 0 ? HIGH : LOW);
     }
 }
 
-void updateRamping()
-{
-    if (!ramping) return;
-    
-    unsigned long currentTime = millis();
-    if (currentTime - lastRampTime >= RAMP_UPDATE_MS) {
-        float elapsed = (currentTime - rampStartTime) / 1000.0; // seconds
-        float rampDistance = rampTargetMA - rampStartMA;
-        float rampTime = abs(rampDistance) / RAMP_RATE_MA_PER_SEC;
-        
-        if (elapsed >= rampTime) {
-            // Ramp complete
-            targetCurrentMA = rampTargetMA;
-            ramping = false;
-            currentControlState = CURRENT_STABLE;
-            Serial.println("Ramp complete: " + String(targetCurrentMA) + " mA");
-        } else {
-            // Calculate current target based on ramp progress
-            float progress = elapsed / rampTime;
-            targetCurrentMA = rampStartMA + (rampDistance * progress);
-        }
-        
-        lastRampTime = currentTime;
-    }
-}
+
 
 void measureCurrent()
 {
@@ -907,14 +813,12 @@ void displayCurrentStatus()
     Serial.println("DAC Value: " + String(currentDacValue) + " (0-4095)");
     Serial.println("DAC Voltage: " + String((currentDacValue * 3.3) / 4095.0, 3) + " V");
     Serial.println("Control State: " + String(currentControlState));
-    Serial.println("Ramping: " + String(ramping ? "Yes" : "No"));
-    Serial.println("Consecutive Errors: " + String(consecutiveErrors));
     Serial.println("=====================");
 }
 
 void safetyCheck()
 {
-    if (!ina226Initialized || !currentControlEnabled) return;
+    if (!ina226Initialized) return;
     
     // Check for overcurrent
     if (currentMA > SAFETY_SHUTDOWN_MA) {
@@ -922,11 +826,12 @@ void safetyCheck()
         emergencyShutdown();
     }
     
-    // Check for measurement timeout
-    if (millis() - lastMeasurementTime > 5000) { // 5 second timeout
-        Serial.println("EMERGENCY: INA226 measurement timeout!");
+    // Check for voltage drop
+    if (voltageV < 4.85) {
+        Serial.println("EMERGENCY: Voltage drop detected! " + String(voltageV, 3) + " V");
         emergencyShutdown();
     }
+    
 }
 
 void emergencyShutdown()
@@ -938,17 +843,17 @@ void emergencyShutdown()
     digitalWrite(userLedPin, LOW);
     
     // Reset control variables
-    currentControlEnabled = false;
     currentControlState = CURRENT_OFF;
     targetCurrentMA = 0.0;
     currentDacValue = 0;
     targetDacValue = 0;
-    ramping = false;
     
-    // Reset PID variables
-    integralError = 0.0;
-    lastError = 0.0;
-    consecutiveErrors = 0;
+    // Send emergency shutdown command to all devices
+    if (isMasterDevice)
+    {
+        Serial.println("DEBUG: Broadcasting emergency shutdown to all devices");
+        Serial1.println("000,dac,0");
+    }
     
     Serial.println("System shutdown complete. Check hardware and restart.");
 }

@@ -5,17 +5,17 @@ A sophisticated Arduino firmware for controlling solar panel systems using ItsyB
 ## Features
 
 - **Round-Robin Communication**: Multi-device chain communication system
-- **Current Control**: Closed-loop current control with PID algorithm
+- **Current Control**: Closed-loop current control with direct DAC adjustment
 - **INA226 Integration**: High-precision current and voltage monitoring
 - **Servo Control**: Position control for solar panel tracking
-- **Safety Features**: Overcurrent protection and emergency shutdown
-- **Ramping Control**: Smooth current transitions to prevent system stress
+- **Safety Features**: Overcurrent protection, voltage drop detection, and emergency shutdown
+- **Chain Break Protection**: Automatic shutdown when communication is lost
 
 ## Hardware Requirements
 
 - **Microcontroller**: Adafruit ItsyBitsy M4 Express
 - **Current Sensor**: INA226 I2C current/voltage monitor
-- **Shunt Resistor**: 58mΩ for 1.4A maximum current
+- **Shunt Resistor**: 41.95mΩ for 1.5A maximum current
 - **Servo Motor**: Standard servo for panel positioning
 - **Status LEDs**: System status indication
 
@@ -57,8 +57,8 @@ The master device (connected via USB) accepts the following commands:
 
 #### Device Control
 - `xxx,servo,angle` - Set servo angle (60-120 degrees)
-- `xxx,current,ma` - Set target current (0-1500mA)
-- `xxx,dac,value` - Set DAC value directly (0-4095)
+- `xxx,current,ma` - Set target current (0-1500mA) - closed-loop control
+- `xxx,dac,value` - Set DAC value directly (0-4095) - bypasses current control
 
 Where `xxx` is:
 - `000` = all devices (broadcast)
@@ -68,34 +68,36 @@ Where `xxx` is:
 - `help` - Show command help
 - `status` - Show system status
 - `reinit` - Restart device initialization
-- `current` - Show current measurement
-- `emergency` - Emergency shutdown
+- `current` or `c` - Show current measurement
+- `emergency` or `e` - Emergency shutdown
 
 ### Examples
 
 ```bash
-# Set all devices to 500mA
+# Set all devices to 500mA using closed-loop control
 000,current,500
 
 # Set device 1 servo to 90 degrees
 001,servo,90
 
-# Set device 2 DAC to 50%
+# Set device 2 DAC to 50% (direct control)
 002,dac,2048
+
+# Show current status
+current
 ```
 
 ## Configuration
 
-### Current Control Parameters
-- **KP**: 0.1 (Proportional gain)
-- **KI**: 0.01 (Integral gain)
-- **KD**: 0.001 (Derivative gain)
-- **Control Rate**: 100ms (10Hz)
-- **Ramp Rate**: 100mA/second
+### Current Control
+- **Control Method**: Simple increment/decrement based on target vs measured current
+- **DAC Range**: 0-4095 (12-bit resolution)
+- **Update Rate**: Continuous during main loop execution
 
 ### Safety Limits
 - **Maximum Current**: 1500mA
 - **Safety Shutdown**: 1350mA
+- **Voltage Drop Limit**: 4.85V (triggers emergency shutdown)
 - **Shunt Resistance**: 0.04195Ω
 
 ## Architecture
@@ -115,21 +117,60 @@ The system uses a round-robin communication protocol where:
 - `READY` - Ready for new commands
 
 ### Current Control States
-- `CURRENT_OFF` - Current control disabled
-- `CURRENT_RAMPING` - Ramping to target current
+- `CURRENT_OFF` - Current control disabled (target = 0)
 - `CURRENT_STABLE` - At target, maintaining
 - `CURRENT_ERROR` - Error condition
 
 ## Safety Features
 
+### Automatic Protection
 - **Overcurrent Protection**: Automatic shutdown at 1350mA
-- **Measurement Timeout**: Shutdown if INA226 fails
-- **Consecutive Error Detection**: Shutdown after 5 consecutive errors
-- **Emergency Shutdown**: Immediate DAC shutdown and system reset
+- **Voltage Drop Protection**: Shutdown if bus voltage drops below 4.85V
+- **Chain Break Protection**: Automatic shutdown when communication is lost
+- **Power-On Safety**: All devices start with DAC = 0 for safety
+
+### Emergency Shutdown
+- **Local Shutdown**: Immediately turns off local DAC output
+- **Broadcast Shutdown**: Master device broadcasts DAC=0 to all devices
+- **System Reset**: All control variables reset to safe state
+
+### Safety Flow
+1. **Power On** → DAC = 0, all variables reset to safe state
+2. **Chain Break** → Emergency shutdown, broadcast DAC=0 to all devices
+3. **Overcurrent** → Emergency shutdown, broadcast DAC=0 to all devices  
+4. **Voltage Drop** → Emergency shutdown, broadcast DAC=0 to all devices
+5. **Emergency Command** → Manual emergency shutdown
+
+## Current Control Operation
+
+### Closed-Loop Control (current command)
+- Sets target current (0-1500mA)
+- Continuously adjusts DAC value to maintain target current
+- Simple algorithm: increment DAC if current < target, decrement if current > target
+- Constrains DAC value between 0-4095
+
+### Direct Control (dac command)
+- Bypasses current control
+- Sets DAC value directly (0-4095)
+- Useful for testing or manual control
+
+## Troubleshooting
+
+### Common Issues
+1. **Chain not connecting**: Check physical connections and rxReady/txReady pins
+2. **Current not reaching target**: Check INA226 connections and shunt resistor
+3. **Emergency shutdowns**: Check for overcurrent, voltage drops, or chain breaks
+4. **INA226 not initializing**: Check I2C connections and address (default: 0x4A)
+
+### Debug Commands
+- Use `status` to check system state
+- Use `current` to see real-time measurements
+- Monitor Serial output for debug messages
 
 ## Version History
 
 - **v1.000**: Initial release with round-robin communication and current control
+- **v1.001**: Simplified current control, enhanced safety features, voltage drop protection
 
 ## Contributing
 
