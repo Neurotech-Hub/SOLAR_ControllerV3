@@ -20,7 +20,7 @@ class SOLARGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("SOLAR Controller GUI v1.001")
-        self.root.geometry("1000x900")
+        self.root.geometry("1000x850")
         
         # Serial communication
         self.serial_port = None
@@ -170,13 +170,19 @@ class SOLARGUI:
         # Angle control
         ttk.Label(servo_frame, text="Angle:").grid(row=1, column=0, sticky=tk.W, pady=(10, 0))
         self.servo_angle_var = tk.IntVar(value=90)
-        servo_angle_spin = ttk.Spinbox(servo_frame, from_=60, to=120, textvariable=self.servo_angle_var, width=10)
+        servo_angle_spin = ttk.Spinbox(servo_frame, from_=60, to=120, textvariable=self.servo_angle_var, width=10, increment=1)
         servo_angle_spin.grid(row=1, column=1, padx=(5, 0), pady=(10, 0), sticky=(tk.W, tk.E))
+        
+        # Configure servo spinbox to show integer values
+        servo_angle_spin.configure(format="%.0f")
         
         # Angle slider
         self.servo_slider = ttk.Scale(servo_frame, from_=60, to=120, orient=tk.HORIZONTAL, 
                                      variable=self.servo_angle_var, length=200)
         self.servo_slider.grid(row=1, column=2, columnspan=2, padx=(20, 0), pady=(10, 0), sticky=(tk.W, tk.E))
+        
+        # Configure servo slider to show integer values
+        self.servo_slider.configure(resolution=1)
         
         # Preset buttons
         preset_frame = ttk.Frame(servo_frame)
@@ -219,15 +225,21 @@ class SOLARGUI:
         
         # Current control
         ttk.Label(current_frame, text="Current (mA):").grid(row=1, column=0, sticky=tk.W, pady=(10, 0))
-        self.current_value_var = tk.DoubleVar(value=0.0)
-        current_value_spin = ttk.Spinbox(current_frame, from_=0.0, to=1500.0, 
-                                        textvariable=self.current_value_var, width=10, increment=10.0)
+        self.current_value_var = tk.IntVar(value=0)
+        current_value_spin = ttk.Spinbox(current_frame, from_=0, to=1500, 
+                                        textvariable=self.current_value_var, width=10, increment=10)
         current_value_spin.grid(row=1, column=1, padx=(5, 0), pady=(10, 0), sticky=(tk.W, tk.E))
         
+        # Configure current spinbox to show integer values
+        current_value_spin.configure(format="%.0f")
+        
         # Current slider
-        self.current_slider = ttk.Scale(current_frame, from_=0.0, to=1500.0, orient=tk.HORIZONTAL, 
+        self.current_slider = ttk.Scale(current_frame, from_=0, to=1500, orient=tk.HORIZONTAL, 
                                        variable=self.current_value_var, length=200)
         self.current_slider.grid(row=1, column=2, columnspan=2, padx=(20, 0), pady=(10, 0), sticky=(tk.W, tk.E))
+        
+        # Configure current slider to show integer values
+        self.current_slider.configure(resolution=10)
         
         # Preset buttons
         preset_frame = ttk.Frame(current_frame)
@@ -238,11 +250,11 @@ class SOLARGUI:
         preset_frame.columnconfigure(3, weight=1)
         preset_frame.columnconfigure(4, weight=1)
         
-        ttk.Button(preset_frame, text="0mA", command=lambda: self.set_current_value(0.0)).grid(row=0, column=0, padx=(0, 5))
-        ttk.Button(preset_frame, text="375mA", command=lambda: self.set_current_value(375.0)).grid(row=0, column=1, padx=(0, 5))
-        ttk.Button(preset_frame, text="750mA", command=lambda: self.set_current_value(750.0)).grid(row=0, column=2, padx=(0, 5))
-        ttk.Button(preset_frame, text="1125mA", command=lambda: self.set_current_value(1125.0)).grid(row=0, column=3, padx=(0, 5))
-        ttk.Button(preset_frame, text="1500mA", command=lambda: self.set_current_value(1500.0)).grid(row=0, column=4, padx=(0, 5))
+        ttk.Button(preset_frame, text="0mA", command=lambda: self.set_current_value(0)).grid(row=0, column=0, padx=(0, 5))
+        ttk.Button(preset_frame, text="375mA", command=lambda: self.set_current_value(375)).grid(row=0, column=1, padx=(0, 5))
+        ttk.Button(preset_frame, text="750mA", command=lambda: self.set_current_value(750)).grid(row=0, column=2, padx=(0, 5))
+        ttk.Button(preset_frame, text="1125mA", command=lambda: self.set_current_value(1125)).grid(row=0, column=3, padx=(0, 5))
+        ttk.Button(preset_frame, text="1500mA", command=lambda: self.set_current_value(1500)).grid(row=0, column=4, padx=(0, 5))
         
         # Set button
         ttk.Button(current_frame, text="Set Current", command=self.set_current).grid(row=3, column=0, columnspan=4, pady=(10, 0))
