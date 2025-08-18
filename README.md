@@ -49,7 +49,7 @@ Think of it as a "conductor" for an orchestra of LED arrays and servo motors wit
 | D1  | TX | → Data to next device |
 | D0  | RX | ← Data from previous device |
 | D2  | User LED | Built-in status indicator |
-| D13 | Status LED | System status indicator |
+| D13 | Status LED | Current status indicator |
 | I2C | SDA/SCL | → INA226 Current Sensor |
 
 ## Chain Configuration
