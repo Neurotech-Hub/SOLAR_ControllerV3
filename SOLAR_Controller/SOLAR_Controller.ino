@@ -22,7 +22,7 @@ INA226 ina226(0x4A);  // Default I2C address
 const float SHUNT_RESISTANCE = 0.04195;  // 41.95mΩ shunt for 1.5A max
 const float MAX_CURRENT_MA = 1500.0;   // Maximum current in mA
 const float MIN_CURRENT_MA = 0.0;      // Minimum current in mA
-const float SAFETY_SHUTDOWN_MA = 1350.0; // Safety shutdown threshold
+const float SAFETY_SHUTDOWN_MA = 1500.0; // Safety shutdown threshold
 
 // Current Control Parameters (simple)
 const int dacMin = 0;            // Minimum DAC value

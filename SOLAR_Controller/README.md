@@ -96,7 +96,6 @@ current
 
 ### Safety Limits
 - **Maximum Current**: 1500mA
-- **Safety Shutdown**: 1350mA
 - **Voltage Drop Limit**: 4.85V (triggers emergency shutdown)
 - **Shunt Resistance**: 0.04195Ω
 
@@ -124,7 +123,7 @@ The system uses a round-robin communication protocol where:
 ## Safety Features
 
 ### Automatic Protection
-- **Overcurrent Protection**: Automatic shutdown at 1350mA
+- **Overcurrent Protection**: Automatic shutdown at 1500mA
 - **Voltage Drop Protection**: Shutdown if bus voltage drops below 4.85V
 - **Chain Break Protection**: Automatic shutdown when communication is lost
 - **Power-On Safety**: All devices start with DAC = 0 for safety
@@ -136,7 +135,6 @@ The system uses a round-robin communication protocol where:
 
 ### Safety Flow
 1. **Power On** → DAC = 0, all variables reset to safe state
-2. **Chain Break** → Emergency shutdown, broadcast DAC=0 to all devices
 3. **Overcurrent** → Emergency shutdown, broadcast DAC=0 to all devices  
 4. **Voltage Drop** → Emergency shutdown, broadcast DAC=0 to all devices
 5. **Emergency Command** → Manual emergency shutdown
