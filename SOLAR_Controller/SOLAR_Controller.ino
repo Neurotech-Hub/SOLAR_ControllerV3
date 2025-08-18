@@ -437,7 +437,6 @@ void processCommand(String data)
             digitalWrite(userLedPin, current > 0 ? HIGH : LOW);
             if (Serial)
             {
-                Serial.println("CUR:" + String(myDeviceId) + ":" + String(current));
                 Serial.println("DEBUG: Target current: " + String(targetCurrentMA) + " mA");
             }
         }
@@ -454,7 +453,7 @@ void processCommand(String data)
             digitalWrite(userLedPin, value > 1200 ? HIGH : LOW);
             if (Serial)
             {
-                Serial.println("DAC:" + String(myDeviceId) + ":" + String(value));
+                Serial.println("DEBUG: Target DAC:" + String(value));
             }
         }
     }
@@ -785,6 +784,11 @@ void updateCurrentControl()
         currentDacValue += (currentMA < targetCurrentMA) ? 1 : -1;
         currentDacValue = constrain(currentDacValue, dacMin, dacMax);
         // Check for voltage drop
+        if (voltageV < 4.9) {
+            Serial.println("!!! WARNING !!!");
+            Serial.println("Voltage drop detected! " + String(voltageV, 3) + " V");
+            Serial.println("===================================");
+        }
         if (voltageV < 4.85) {
             Serial.println("EMERGENCY: Voltage drop detected! " + String(voltageV, 3) + " V");
             emergencyShutdown();
@@ -855,4 +859,5 @@ void emergencyShutdown()
     }
     
     Serial.println("System shutdown complete. Check hardware and restart.");
+    return;
 }

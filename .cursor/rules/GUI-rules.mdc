@@ -1,0 +1,45 @@
+---
+alwaysApply: false
+---
+
+Adafruit Itsybitsy M4 hardware and INA226 IC used for this project.
+
+# Project Structure
+
+1. Servo control (60 to 120)
+    Modes: 
+    1. All: Default device is 000 (All device)
+    2. Individual: User can Device number in chain from total device detection
+    Command: 00x,servo,angle [x: device, angle: value]
+
+2. Current control (0mA to 1500mA)
+    Modes:
+    1. All: Default device is 000 (All device)    
+    2. Individual: User can Device number in chain from total device detection
+    command: 00x,current,mA [x: device, mA: value]
+
+- Do not change the project design structure.
+
+# Log
+1. Log sync with SOLAR_Controller.ino file
+
+## README Standards (`README.md`)
+README files should focus on high-level usage and implementation guidance:
+
+**AVOID**:
+- ❌ Function-by-function documentation
+- ❌ Do not change the project design structure.
+- ❌ Feature lists or bullet points
+- ❌ Emojis or decorative elements
+- ❌ Verbose explanations of obvious concepts
+- ❌ Implementation details that don't help usage
+- ❌ Building and programming instructions
+- ❌ Troubleshooting sections
+- ❌ Hardware verification procedures
+- ❌ Usage notes and key concepts
+- ❌ Support sections
+
+**INCLUDE**:
+- ✅ Concise purpose statement
+- ✅ Overview and capabilities
+- ✅ Complete pin assignment table

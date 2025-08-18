@@ -1,189 +1,298 @@
-# Solar Controller Firmware
+# SOLAR GUI
 
-A sophisticated Arduino firmware for controlling solar panel systems using ItsyBitsy M4 microcontrollers with INA226 current monitoring and round-robin communication.
+A Python GUI application for controlling ItsyBitsy M4 boards in a daisy-chained round-robin communication system with INA226 current monitoring. This application provides precise control over servo motors and LED arrays through current-based control with real-time monitoring and safety features.
+
+## Overview
+
+The SOLAR Controller GUI enables seamless control of multiple ItsyBitsy M4 boards arranged in a daisy chain. Each board can control a servo motor (60-120 degrees, safety limited) and an LED array via 12-bit DAC output with INA226 current monitoring (0-1500mA current control, safety limited). The system uses a round-robin communication protocol where commands are passed from one device to the next, allowing for both synchronized and individual device control with real-time current feedback.
+
+## 🚀 What This System Does
+
+This GUI controls a smart chain of ItsyBitsy M4 controllers that can:
+- Control LED brightness on multiple devices simultaneously or individually with current-based control
+- Move servo motors to precise positions (60-120 degrees)  
+- Monitor real-time current consumption using INA226 sensors
+- Communicate through a daisy-chain setup with automatic device detection
+- Provide comprehensive safety features including overcurrent protection and voltage drop detection
+- Run entertaining demo patterns for testing and demonstration
+- Automatically populate system status upon connection
+
+Think of it as a "conductor" for an orchestra of LED arrays and servo motors with built-in safety monitoring!
 
 ## Features
 
-- **Round-Robin Communication**: Multi-device chain communication system
-- **Current Control**: Closed-loop current control with direct DAC adjustment
-- **INA226 Integration**: High-precision current and voltage monitoring
-- **Servo Control**: Position control for solar panel tracking
-- **Safety Features**: Overcurrent protection, voltage drop detection, and emergency shutdown
-- **Chain Break Protection**: Automatic shutdown when communication is lost
+
+- **Servo Control**: Set servo angles from 60-120 degrees with preset buttons, slider, and dual control modes
+- **Current-Based Control**: Control LED brightness via current (0-1500mA, safety limited) with real-time INA226 monitoring
+- **Safety Features**: Overcurrent protection, voltage drop detection, chain break detection, and emergency shutdown
+- **Device Targeting**: Command all devices (000) or target specific devices individually with smart mode switching
+- **Real-time Status**: Monitor connection status, device count, system state, and INA226 sensor status with color-coded indicators
+- **Serial Port Management**: Automatic port scanning, connection, and auto-connect to first available port
+- **Command Logging**: Track all sent and received commands with timestamps and filtered display (DEBUG messages hidden)
 
 ## Hardware Requirements
 
-- **Microcontroller**: Adafruit ItsyBitsy M4 Express
-- **Current Sensor**: INA226 I2C current/voltage monitor
-- **Shunt Resistor**: 41.95mΩ for 1.5A maximum current
-- **Servo Motor**: Standard servo for panel positioning
-- **Status LEDs**: System status indication
+- ItsyBitsy M4 controllers in daisy-chain configuration
+- 5V power supply
+- Servo motors connected to PWM pin D5
+- INA226 current monitoring sensors (I2C address 0x4A)
+- Proper wiring for round-robin communication
 
-## Pin Assignments
+## Pin Connections
 
-| Pin | Function | Description |
-|-----|----------|-------------|
-| A0  | DAC Output | 12-bit analog output (0-4095) |
-| 5   | Servo Control | Servo motor position control |
-| 13  | Status LED | System status indication |
-| 7   | RX Ready | Chain ready input |
-| 9   | TX Ready | Chain ready output |
-| 2   | User LED | User indicator |
-| D1  | Serial1 TX | Chain communication |
-| D0  | Serial1 RX | Chain communication |
+| Pin | Function | Connection |
+|-----|----------|------------|
+| A0  | DAC Output | → LED Array Control (12-bit, 0-4095, amplified for 0-1500mA) |
+| D5  | PWM Output | → Servo Motor (5V logic level, 60-120°) |
+| D7  | RX_READY | ← Signal from previous device |
+| D9  | TX_READY | → Signal to next device |
+| D1  | TX | → Data to next device |
+| D0  | RX | ← Data from previous device |
+| D2  | User LED | Built-in status indicator |
+| D13 | Status LED | System status indicator |
+| I2C | SDA/SCL | → INA226 Current Sensor |
+
+## Chain Configuration
+
+```
+[Master Device] → [Device 2] → [Device 3] → [Device 4] → ... → [Back to Master]
+    (USB)           (5V)        (5V)        (5V)
+```
 
 ## Installation
 
-1. Clone this repository:
+1. **Install required dependencies**:
    ```bash
-   git clone https://github.com/yourusername/Solar_Controller.git
-   cd Solar_Controller
+   pip install -r requirements.txt
    ```
-
-2. Install required Arduino libraries:
-   - `Servo` (built-in)
-   - `Wire` (built-in)
-   - `INA226` (install via Arduino Library Manager)
-
-3. Open `SOLAR_Controller/SOLAR_Controller.ino` in Arduino IDE
-
-4. Select your ItsyBitsy M4 board and upload
+2. **Run the GUI**:
+   ```bash
+   python SOLAR_GUI.py
+   ```
 
 ## Usage
 
-### Master Device Commands
+### Connection Setup
 
-The master device (connected via USB) accepts the following commands:
+1. **Power Sequence**:
+   - Connect 5V power to all slave devices first
+   - Then connect master device via USB to computer
+2. **Software Connection**:
+   - Launch GUI (automatically connects to first available port)
+   - Or manually select COM port and click "Connect"
+   - Set baud rate to 115200 (matches Arduino default)
+3. **Initialization**:
+   - Wait 5-10 seconds for device auto-detection
+   - Check "Total Devices" shows correct count
+   - System state should show "Ready"
+   - INA226 status should show "OK"
 
-#### Device Control
-- `xxx,servo,angle` - Set servo angle (60-120 degrees)
-- `xxx,current,ma` - Set target current (0-1500mA) - closed-loop control
-- `xxx,dac,value` - Set DAC value directly (0-4095) - bypasses current control
+### Device Control
 
-Where `xxx` is:
-- `000` = all devices (broadcast)
-- `001-N` = specific device ID
+#### Servo Control (60-120 degrees, safety limited)
+- **All Servos Mode**: Synchronize all devices simultaneously (Device 000)
+- **Individual Mode**: Target specific device (001, 002, 003...)
+- **Controls**: Slider, spinbox, or preset buttons (60°, 75°, 90°, 105°, 120°)
 
-#### System Commands
-- `help` - Show command help
-- `status` - Show system status
-- `reinit` - Restart device initialization
-- `current` or `c` - Show current measurement
-- `emergency` or `e` - Emergency shutdown
+#### Current Control (0-1500mA current-based, safety limited)
+- **All LEDs Mode**: Broadcast to entire chain (Device 000)
+- **Individual Mode**: Target specific device
+- **Current Control**: Set output from 0-1500mA using slider, spinbox, or presets
+- **Real-time Monitoring**: INA226 sensor provides live current, voltage, and power readings
 
-### Examples
+### Demo Patterns
 
-```bash
-# Set all devices to 500mA using closed-loop control
-000,current,500
+The GUI includes three entertaining demo patterns perfect for testing and demonstration:
 
-# Set device 1 servo to 90 degrees
-001,servo,90
+1. **🕺 Servo Dance**: Servo sweep (60°→120°→90°) + Current flash (750mA→0mA), runs 2 cycles
+2. **🌊 Servo Wave**: Smooth servo oscillation with gradual movements, runs 2 cycles  
+3. **🌈 Current Rainbow**: Progressive brightness fade (0→1000mA→0), runs 2 cycles
 
-# Set device 2 DAC to 50% (direct control)
-002,dac,2048
+All demos:
+- Run automatically for 2 complete cycles
+- Can be interrupted with "Stop Demo" button
+- Sync status with current system state
 
-# Show current status
-current
+### System Commands
+
+- **Device Status**: Query current system status, device count, and chain health
+- **Current Status**: Get detailed INA226 readings (current, voltage, power, DAC values)
+- **Re-initialize**: Manually restart device chain detection and ID assignment
+- **Emergency Shutdown**: Immediately set all devices to 0 DAC value for safety
+- **Help**: Display comprehensive built-in help documentation
+
+### Command Format
+
+The GUI automatically formats commands in the Arduino-expected format:
+```
+deviceId,command,value
 ```
 
-## Configuration
+Examples:
+- `002,servo,90` - Set device 2 servo to 90 degrees
+- `000,current,750` - Set all devices current to 750mA
+- `001,servo,120` - Set device 1 servo to 120 degrees
+- `003,current,0` - Turn off device 3 LEDs
 
-### Current Control
-- **Control Method**: Simple increment/decrement based on target vs measured current
-- **DAC Range**: 0-4095 (12-bit resolution)
-- **Update Rate**: Continuous during main loop execution
+## GUI Sections
 
-### Safety Limits
-- **Maximum Current**: 1500mA
-- **Safety Shutdown**: 1350mA
-- **Voltage Drop Limit**: 4.85V (triggers emergency shutdown)
-- **Shunt Resistance**: 0.04195Ω
+### 1. Serial Connection
+- Port selection with auto-refresh capability
+- Baud rate configuration (default: 115200)
+- Auto-connect feature for convenience
+- Connect/disconnect controls with status indication
 
-## Architecture
+### 2. System Status
+- Connection status indicator (Green/Red)
+- Auto-detected total device count
+- Current system state (Ready, Initializing, Processing, etc.)
+- INA226 sensor status (OK, Error, Unknown)
+- Manual command buttons (Device Status, Re-initialize, Current Status, Emergency)
 
-### Communication Protocol
-The system uses a round-robin communication protocol where:
-1. Master device initiates commands
-2. Commands travel through the device chain
-3. Each device processes commands intended for it
-4. Commands return to master for completion confirmation
+### 3. Servo Control (60-120°)
+- **Target Mode**: All Servos (000) or Individual device selection
+- **Device Selection**: Dropdown populated with detected devices
+- **Angle Control**: Slider (60-120°) and spinbox input
+- **Preset Buttons**: 60°, 75°, 90°, 105°, 120°
+- **Set Servo**: Execute servo command
 
-### Device States
-- `WAITING_FOR_CHAIN` - Waiting for chain connection
-- `CHAIN_READY` - Chain connected and ready
-- `INIT_IN_PROGRESS` - Device initialization in progress
-- `PROCESSING` - Processing a command
-- `READY` - Ready for new commands
+### 4. Current Control (0-1500mA)
+- **Target Mode**: All LEDs (000) or Individual device selection
+- **Device Selection**: Dropdown populated with detected devices
+- **Current Control**: Slider (0-1500mA) and spinbox input
+- **Preset Buttons**: 0mA, 375mA, 750mA, 1125mA, 1500mA
+- **Set Current**: Execute current command
 
-### Current Control States
-- `CURRENT_OFF` - Current control disabled (target = 0)
-- `CURRENT_STABLE` - At target, maintaining
-- `CURRENT_ERROR` - Error condition
+### 5. Demo Patterns
+- Three creative demo patterns with descriptions
+- Synchronized execution across all devices
+- Stop functionality for immediate interruption
+- Status synchronization with system state
+
+### 6. Communication Log
+- Real-time command and response logging with timestamps
+- Filtered display (hides DEBUG messages, shows user-relevant info)
+- Export functionality for troubleshooting
+- Clear log functionality for fresh starts
+
+## Device Communication
+
+The system uses a sophisticated round-robin communication protocol:
+
+1. **Master Device (001)**: Connected via USB, manages the communication chain
+2. **Slave Devices (002, 003, etc.)**: Daisy-chained via Serial pins, forward commands in sequence
+3. **Device IDs**: Automatically assigned during initialization process
+4. **Broadcasting**: Use device ID 000 to command all devices simultaneously
+5. **Auto-Discovery**: Automatic detection of chain length and device assignment
+6. **Error Recovery**: Built-in timeout handling and recovery mechanisms
+7. **Safety Features**: Emergency shutdown broadcasting and voltage drop detection
 
 ## Safety Features
 
-### Automatic Protection
-- **Overcurrent Protection**: Automatic shutdown at 1350mA
-- **Voltage Drop Protection**: Shutdown if bus voltage drops below 4.85V
-- **Chain Break Protection**: Automatic shutdown when communication is lost
-- **Power-On Safety**: All devices start with DAC = 0 for safety
+### Hardware Safety
+- **Overcurrent Protection**: Automatic shutdown if current exceeds 1500mA
+- **Voltage Drop Detection**: Emergency shutdown if bus voltage drops below 4.85V
+- **Chain Break Detection**: Automatic reset to safe state on communication failure
+- **Power-on Safety**: All devices start with 0 DAC value and forget previous settings
 
-### Emergency Shutdown
-- **Local Shutdown**: Immediately turns off local DAC output
-- **Broadcast Shutdown**: Master device broadcasts DAC=0 to all devices
-- **System Reset**: All control variables reset to safe state
-
-### Safety Flow
-1. **Power On** → DAC = 0, all variables reset to safe state
-2. **Chain Break** → Emergency shutdown, broadcast DAC=0 to all devices
-3. **Overcurrent** → Emergency shutdown, broadcast DAC=0 to all devices  
-4. **Voltage Drop** → Emergency shutdown, broadcast DAC=0 to all devices
-5. **Emergency Command** → Manual emergency shutdown
-
-## Current Control Operation
-
-### Closed-Loop Control (current command)
-- Sets target current (0-1500mA)
-- Continuously adjusts DAC value to maintain target current
-- Simple algorithm: increment DAC if current < target, decrement if current > target
-- Constrains DAC value between 0-4095
-
-### Direct Control (dac command)
-- Bypasses current control
-- Sets DAC value directly (0-4095)
-- Useful for testing or manual control
+### Software Safety
+- **Emergency Shutdown**: Broadcasts `000,dac,0` to all devices
+- **Current Limits**: GUI enforces 0-1500mA range
+- **Servo Limits**: GUI enforces 60-120° range
+- **Real-time Monitoring**: Live current and voltage feedback
 
 ## Troubleshooting
 
-### Common Issues
-1. **Chain not connecting**: Check physical connections and rxReady/txReady pins
-2. **Current not reaching target**: Check INA226 connections and shunt resistor
-3. **Emergency shutdowns**: Check for overcurrent, voltage drops, or chain breaks
-4. **INA226 not initializing**: Check I2C connections and address (default: 0x4A)
+### Visual Indicators on Hardware
 
-### Debug Commands
-- Use `status` to check system state
-- Use `current` to see real-time measurements
-- Monitor Serial output for debug messages
+- **Blue LED Steady**: Normal operation
+- **Blue LED Stuck On**: Device error - press reset button on PCB
+- **Orange LED Blinking**: Normal state indication  
+- **User LED Active**: When current > 0mA
+
+### Common Issues
+
+1. **Device Detection Problems**
+   - **Symptom**: "Total Devices" shows 0 or wrong count
+   - **Solution**: Click "Re-initialize" to restart detection
+   - **Check**: Verify all devices are powered before USB connection
+   - **Verify**: Physical daisy-chain connections are correct
+
+2. **Command Not Working**
+   - **Check**: Device count matches your physical hardware
+   - **Verify**: Servo angles are within 60-120° (safety limited)
+   - **Verify**: Current is within 0-1500mA range (safety limited)
+   - **Monitor**: Communication log for error messages
+   - **Test**: Use "Device Status" to check system health
+
+3. **INA226 Sensor Issues**
+   - **Symptom**: INA226 status shows "Error" or "Unknown"
+   - **Check**: I2C connections (SDA/SCL) to INA226 sensor
+   - **Verify**: INA226 power supply (3.3V)
+   - **Test**: Use "Current Status" to get detailed sensor readings
+
+4. **Chain Communication Failure**
+   - **Symptom**: Commands timeout or devices don't respond
+   - **Solution**: Press reset button on any stuck device (blue LED on)
+   - **Check**: All 5V power connections and daisy-chain wiring
+   - **Try**: Disconnect/reconnect USB and restart GUI
+
+5. **Emergency Situations**
+   - **Overcurrent**: System automatically shuts down, check LED load
+   - **Voltage Drop**: Emergency shutdown triggered, check power supply
+   - **Manual Emergency**: Use "Emergency" button for immediate shutdown
+
+### Best Practices
+
+- **Startup Sequence**: Power slave devices first, then connect master USB
+- **Command Execution**: Always wait for "✓ Command completed successfully"
+- **Synchronized Control**: Use "All" modes for coordinated movements
+- **Individual Control**: Use "Individual" modes for precise positioning
+- **Monitoring**: Watch communication log for system feedback
+- **Current Monitoring**: Use "Current Status" to verify actual current consumption
+- **Troubleshooting**: Export logs before reporting issues
+- **Hardware**: Check physical connections first for any issues
+
+## Technical Specifications
+
+- **Microcontroller**: SAMD51 (ItsyBitsy M4)
+- **Communication**: 115200 baud, round-robin protocol with auto-discovery
+- **Servo Range**: 60-120 degrees (safety limited from full 0-180° range)
+- **Current Range**: 0-1500mA (safety limited, monitored by INA226)
+- **DAC Resolution**: 12-bit (0-4095 values)
+- **Current Sensor**: INA226 with 41.95mΩ shunt resistor
+- **Max Chain Length**: Limited by power supply and timing constraints
+- **Auto-Discovery**: Automatic device detection and ID assignment
+- **Error Recovery**: Timeout handling and automatic state recovery
+- **Demo Patterns**: Three built-in patterns with 2-cycle execution
+- **Safety Features**: Overcurrent protection, voltage monitoring, emergency shutdown
+
+## Arduino Firmware
+
+The companion Arduino firmware (SOLAR_Controller.ino) provides:
+- Round-robin communication protocol
+- Automatic device discovery and ID assignment
+- Servo control with safety limits
+- Current-based DAC output with INA226 monitoring
+- Real-time current, voltage, and power measurement
+- Safety features including overcurrent and voltage drop protection
+- Error handling and recovery
+- Built-in help and status reporting
+- Visual feedback via onboard LEDs
 
 ## Version History
 
-- **v1.000**: Initial release with round-robin communication and current control
-- **v1.001**: Simplified current control, enhanced safety features, voltage drop protection
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
+- **v1.001**: Initial release with ItsyBitsy M4 and INA226 current control
+- **Current**: Enhanced GUI with auto-status, safety features, and improved user experience
 
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
 ## Support
 
-For issues and questions, please open an issue on GitHub or contact the development team.
+For technical support and questions, please refer to the troubleshooting section above or create an issue in the project repository.

@@ -27,3 +27,6 @@ Thumbs.db
 # Backup files
 *.bak
 *~
+
+# Virtual environment
+.venv/
