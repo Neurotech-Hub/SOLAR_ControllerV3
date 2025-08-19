@@ -177,12 +177,9 @@ class SOLARGUI:
         servo_angle_spin.configure(format="%.0f")
         
         # Angle slider
-        self.servo_slider = ttk.Scale(servo_frame, from_=60, to=120, orient=tk.HORIZONTAL, 
-                                     variable=self.servo_angle_var, length=200)
+        self.servo_slider = tk.Scale(servo_frame, from_=60, to=120, orient=tk.HORIZONTAL, 
+                                     variable=self.servo_angle_var, length=200, resolution=1)
         self.servo_slider.grid(row=1, column=2, columnspan=2, padx=(20, 0), pady=(10, 0), sticky=(tk.W, tk.E))
-        
-        # Configure servo slider to show integer values
-        self.servo_slider.configure(resolution=1)
         
         # Preset buttons
         preset_frame = ttk.Frame(servo_frame)
@@ -234,12 +231,9 @@ class SOLARGUI:
         current_value_spin.configure(format="%.0f")
         
         # Current slider
-        self.current_slider = ttk.Scale(current_frame, from_=0, to=1500, orient=tk.HORIZONTAL, 
-                                       variable=self.current_value_var, length=200)
+        self.current_slider = tk.Scale(current_frame, from_=0, to=1500, orient=tk.HORIZONTAL, 
+                                       variable=self.current_value_var, length=200, resolution=10)
         self.current_slider.grid(row=1, column=2, columnspan=2, padx=(20, 0), pady=(10, 0), sticky=(tk.W, tk.E))
-        
-        # Configure current slider to show integer values
-        self.current_slider.configure(resolution=10)
         
         # Preset buttons
         preset_frame = ttk.Frame(current_frame)
@@ -579,14 +573,14 @@ class SOLARGUI:
             if not self.demo_running:
                 break
             
-            # Current flash: 750mA → 0mA
-            self.root.after(0, self.send_command, "000,current,750")
-            time.sleep(0.5)
+            # Current flash: 50mA → 0mA
+            self.root.after(0, self.send_command, "000,current,50")
+            time.sleep(3)
             if not self.demo_running:
                 break
             
             self.root.after(0, self.send_command, "000,current,0")
-            time.sleep(0.5)
+            time.sleep(1)
     
     def _run_servo_wave(self):
         """Servo wave demo: smooth oscillation"""
@@ -604,7 +598,7 @@ class SOLARGUI:
     
     def _run_current_rainbow(self):
         """Current rainbow demo: progressive brightness fade"""
-        currents = [0, 250, 500, 750, 1000, 750, 500, 250, 0]
+        currents = [0, 250, 500, 650, 500, 250, 0]
         
         for cycle in range(2):
             if not self.demo_running:

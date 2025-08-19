@@ -425,7 +425,7 @@ void processCommand(String data)
             targetServoPos = angle;
             if (Serial)
             {
-                Serial.println("SRV:" + String(myDeviceId) + ":" + String(angle));
+                Serial.println("DEBUG: Servo set to:" + String(angle));
             }
         }
         // Handle current command (closed-loop control)
@@ -434,7 +434,7 @@ void processCommand(String data)
             float current = cmd.value.toFloat();
             current = constrain(current, MIN_CURRENT_MA, MAX_CURRENT_MA);
             setTargetCurrent(current);
-            digitalWrite(userLedPin, current > 0 ? HIGH : LOW);
+            digitalWrite(userLedPin, current > 5 ? HIGH : LOW);
             if (Serial)
             {
                 Serial.println("DEBUG: Target current: " + String(targetCurrentMA) + " mA");
@@ -794,7 +794,7 @@ void updateCurrentControl()
             emergencyShutdown();
         }
         analogWrite(dacPin, currentDacValue);
-        digitalWrite(userLedPin, currentMA > 0 ? HIGH : LOW);
+        digitalWrite(userLedPin, currentMA > 5 ? HIGH : LOW);
     }
 }
 
