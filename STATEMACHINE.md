@@ -27,9 +27,11 @@ In Phase I, we will manually assign programs to all devices. A program will defi
 2. duration_on (int16 - milliseconds) 
 3. DAC value (int16 - 0-4095)
 
+```
 DAC=0   DAC=n              DAC=0
 ________|------------------|
-        t_on --> duration_on        
+        t_on --> duration_on
+```        
 
 **Implementation Details:**
 - Variables can be hardcoded and defaulted to 0
@@ -57,13 +59,14 @@ This program will need to be stored. Upon receiving a trigger command (via seria
 003,program,{10,20,1500}
 004,program,{30,20,1800}
 ```
-
+```
 001 and 003
 ________|------------------|
         10                 30
 002 and 004
 ___________________________|------------------|
         10                 30                  50
+```
 
 ## Command Protocol Changes
 **Implementation Details:**
