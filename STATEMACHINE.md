@@ -63,9 +63,12 @@ This program will need to be stored. Upon receiving a trigger command (via seria
 001 and 003
 ________|------------------|
         10                 30
+time (ms)
+
 002 and 004
 ___________________________|------------------|
         10                 30                  50
+time (ms)
 ```
 
 ## Command Protocol Changes
