@@ -30,11 +30,11 @@ void setup() {
     // ... existing setup code ...
     
     // Setup TRIGGER_IN interrupt (both master and slaves)
-    pinMode(rxReadyPin, INPUT_PULLDOWN);  // TRIGGER_IN
-    pinMode(txReadyPin, OUTPUT);          // TRIGGER_OUT
+    pinMode(triggerInPin, INPUT_PULLDOWN);  // TRIGGER_IN
+    pinMode(triggerOutPin, OUTPUT);          // TRIGGER_OUT
     
     // Attach interrupt for TRIGGER_IN (both master and slaves)
-    attachInterrupt(digitalPinToInterrupt(rxReadyPin), triggerInterrupt, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(triggerInPin), triggerInterrupt, CHANGE);
     
     // ... rest of setup code ...
 }
@@ -109,7 +109,7 @@ void triggerInterrupt() {
         program_phase_start = millis();
         
         // Immediately propagate trigger to next device
-        digitalWrite(txReadyPin, digitalRead(rxReadyPin));
+        digitalWrite(triggerOutPin, digitalRead(triggerInPin));
         
         // Start with DAC off
         analogWrite(dacPin, 0);
@@ -120,7 +120,7 @@ void triggerInterrupt() {
 void masterTriggerInterrupt() {
     if (currentState == CHAIN_READY && !program_running) {
         // Master: when TRIGGER_IN goes LOW, immediately set TRIGGER_OUT HIGH
-        digitalWrite(txReadyPin, HIGH);
+        digitalWrite(triggerOutPin, HIGH);
         
         // Start program execution
         program_running = true;
@@ -230,7 +230,7 @@ void handleTriggerCommand(Command &cmd) {
     if (cmd.value == "start" && currentState == CHAIN_READY && !program_running) {
         // Master initiates trigger cascade
         // Set TRIGGER_OUT LOW to start the cascade
-        digitalWrite(txReadyPin, LOW);
+        digitalWrite(triggerOutPin, LOW);
         
         if (Serial) {
             Serial.println("DEBUG: Master initiated trigger cascade");
