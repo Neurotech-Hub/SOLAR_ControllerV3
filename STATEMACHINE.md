@@ -16,6 +16,30 @@ These need to simply propogate an IO state with zero delay. The master device wi
 - The initialization protocol needs to be fully maintained, no longer relying on RX and TX ready signals, but rather, serial polling only
 - Master device ignores its TRIGGER_IN line
 
+**Revised Trigger Architecture:**
+- Master device DOES have TRIGGER_IN interrupt
+- When master receives LOW on TRIGGER_IN, it immediately brings TRIGGER_OUT HIGH
+- This creates a brief one-shot signal that propagates to all slaves
+- Master command format: `000,trigger,start`
+- Master intercepts and does not relay its own trigger command
+
+**Interrupt Setup:**
+```cpp
+// In setup() function
+void setup() {
+    // ... existing setup code ...
+    
+    // Setup TRIGGER_IN interrupt (both master and slaves)
+    pinMode(rxReadyPin, INPUT_PULLDOWN);  // TRIGGER_IN
+    pinMode(txReadyPin, OUTPUT);          // TRIGGER_OUT
+    
+    // Attach interrupt for TRIGGER_IN (both master and slaves)
+    attachInterrupt(digitalPinToInterrupt(rxReadyPin), triggerInterrupt, CHANGE);
+    
+    // ... rest of setup code ...
+}
+```
+
 Purpose: these IO lines will now be used as an active LOW one-shot trigger, playing out 'programs' as described below. The master will receive the START signal over serial and begin its program once it sets its own line LOW.
 
 Changes: we will need to poll for incoming serial commands now instead of relying on the IO pins.
@@ -52,13 +76,175 @@ This program will need to be stored. Upon receiving a trigger command (via seria
 - Use millis() for timing (strict timing required)
 - No current control loop - only direct DAC control
 - No safety features or error handling - simple process only
+- Programs are blocking until completed
+- Programs reset to defaults on power cycle
+- Only one program per device
+- If new program command received while running, ignore until current program completes
+- Previous program values are maintained if new program fails to parse
 
-```
-001,program,{10,20,1500}
-002,program,{30,20,1800}
-003,program,{10,20,1500}
-004,program,{30,20,1800}
-```
+**ISR Context Considerations:**
+- Slaves can propagate trigger state in ISR context (simple digitalWrite)
+- Program execution happens in main loop, not ISR
+- ISR only sets flags and propagates trigger signal
+
+**Sample Program Execution Code:**
+```cpp
+// Program variables (stored per device)
+int16_t program_t_on = 0;        // Delay before DAC on (ms)
+int16_t program_duration_on = 0; // Duration DAC stays on (ms)  
+int16_t program_dac_value = 0;   // DAC value to set
+
+// Program execution state
+bool program_running = false;
+unsigned long program_start_time = 0;
+unsigned long program_phase_start = 0;
+enum ProgramPhase { WAITING, DAC_ON, DAC_OFF, COMPLETE };
+
+// TRIGGER_IN interrupt handler
+void triggerInterrupt() {
+    if (currentState == CHAIN_READY && !program_running) {
+        // Start program execution
+        program_running = true;
+        program_start_time = millis();
+        program_phase_start = millis();
+        
+        // Immediately propagate trigger to next device
+        digitalWrite(txReadyPin, digitalRead(rxReadyPin));
+        
+        // Start with DAC off
+        analogWrite(dacPin, 0);
+    }
+}
+
+// Master-specific trigger interrupt handler
+void masterTriggerInterrupt() {
+    if (currentState == CHAIN_READY && !program_running) {
+        // Master: when TRIGGER_IN goes LOW, immediately set TRIGGER_OUT HIGH
+        digitalWrite(txReadyPin, HIGH);
+        
+        // Start program execution
+        program_running = true;
+        program_start_time = millis();
+        program_phase_start = millis();
+        
+        // Start with DAC off
+        analogWrite(dacPin, 0);
+    }
+}
+
+// Program execution in main loop
+void executeProgram() {
+    if (!program_running) return;
+    
+    unsigned long current_time = millis();
+    unsigned long elapsed = current_time - program_start_time;
+    
+    if (elapsed < program_t_on) {
+        // Phase 1: Waiting before DAC on
+        // DAC remains at 0
+    }
+    else if (elapsed < (program_t_on + program_duration_on)) {
+        // Phase 2: DAC on
+        analogWrite(dacPin, program_dac_value);
+    }
+    else {
+        // Phase 3: Program complete
+        analogWrite(dacPin, 0);
+        program_running = false;
+    }
+}
+
+// Parse program command (similar to existing parseCommand function)
+bool parseProgramCommand(String data, int16_t &t_on, int16_t &duration_on, int16_t &dac_value) {
+    // Expected format: "001,program,{10,20,1500}"
+    
+    // Find the opening brace
+    int braceStart = data.indexOf('{');
+    int braceEnd = data.indexOf('}');
+    
+    if (braceStart == -1 || braceEnd == -1) {
+        return false;
+    }
+    
+    // Extract the values between braces
+    String values = data.substring(braceStart + 1, braceEnd);
+    
+    // Parse the three comma-separated values
+    int firstComma = values.indexOf(',');
+    int secondComma = values.indexOf(',', firstComma + 1);
+    
+    if (firstComma == -1 || secondComma == -1) {
+        return false;
+    }
+    
+    // Extract and validate each value
+    int16_t temp_t_on = values.substring(0, firstComma).toInt();
+    int16_t temp_duration_on = values.substring(firstComma + 1, secondComma).toInt();
+    int16_t temp_dac_value = values.substring(secondComma + 1).toInt();
+    
+    // Validate ranges (int16 limits)
+    if (temp_t_on < 0 || temp_t_on > 32767) return false;
+    if (temp_duration_on < 0 || temp_duration_on > 32767) return false;
+    if (temp_dac_value < 0 || temp_dac_value > 4095) return false;
+    
+    // All valid, assign to output parameters
+    t_on = temp_t_on;
+    duration_on = temp_duration_on;
+    dac_value = temp_dac_value;
+    
+    return true;
+}
+
+// Program command handling (add to existing processCommand function)
+void handleProgramCommand(Command &cmd) {
+    int16_t t_on, duration_on, dac_value;
+    
+    if (parseProgramCommand(cmd.value, t_on, duration_on, dac_value)) {
+        // Store the program parameters
+        program_t_on = t_on;
+        program_duration_on = duration_on;
+        program_dac_value = dac_value;
+        
+        if (Serial) {
+            Serial.println("DEBUG: Program stored - t_on:" + String(t_on) + 
+                          "ms, duration:" + String(duration_on) + 
+                          "ms, DAC:" + String(dac_value));
+        }
+    } else {
+        if (Serial) {
+            Serial.println("DEBUG: Invalid program format: " + cmd.value);
+        }
+    }
+}
+
+// Add to existing processCommand function:
+// else if (cmd.command == "program")
+// {
+//     handleProgramCommand(cmd);
+// }
+
+// Trigger command handling (master only)
+void handleTriggerCommand(Command &cmd) {
+    if (!isMasterDevice) return; // Only master handles trigger commands
+    
+    if (cmd.value == "start" && currentState == CHAIN_READY && !program_running) {
+        // Master initiates trigger cascade
+        // Set TRIGGER_OUT LOW to start the cascade
+        digitalWrite(txReadyPin, LOW);
+        
+        if (Serial) {
+            Serial.println("DEBUG: Master initiated trigger cascade");
+        }
+    }
+}
+
+// Add to existing processCommand function:
+// else if (cmd.command == "trigger")
+// {
+//     handleTriggerCommand(cmd);
+// }
+
+### Example Program on Oscilloscope
 ```
 001 and 003
 ________|------------------|
@@ -85,3 +271,4 @@ time (ms)
 - No new states required - integrate with existing state machine
 - Maintain all existing functionality
 - No changes to current control during program execution (DAC direct control only)
+
