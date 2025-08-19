@@ -243,9 +243,9 @@ void handleTriggerCommand(Command &cmd) {
 // {
 //     handleTriggerCommand(cmd);
 // }
+```
 
 ### Example Program on Oscilloscope
-
 ```
 001 and 003
 ________|------------------|
