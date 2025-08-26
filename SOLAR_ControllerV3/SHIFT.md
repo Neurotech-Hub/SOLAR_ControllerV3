@@ -112,10 +112,10 @@ If `group_id` is set to 0, it shall not execute any program (see below). Therefo
 ## Program Execution
 Assuming a 4 module system, first set the program for all devices:
 
-000,program,{1,4,2000}
-001,program,{2,4,1000}
-002,program,{1,4,2000}
-003,program,{2,4,1000}
+000,program,{1,4,1400}
+001,program,{2,4,1300}
+002,program,{1,4,1400}
+003,program,{2,4,1300}
 
 Devices 0 (master) and 2, and devices 1 and 3 are in the same group and will operate together. When a new program is set, a variable `current_group` is set to 1 (master and slaves). Here's how that works:
 
@@ -127,7 +127,7 @@ Devices 0 (master) and 2, and devices 1 and 3 are in the same group and will ope
 
 **Group Rotation Logic**: Devices only activate their intensity when `current_group` matches their `group_id`. When rotation occurs, `current_group` increments and wraps around to 1 when it exceeds `group_total`. In our 4 module setup (with group_total=2), `current_group` would 'rotate' as follows:
 
-1->2->1->2
+1->2->1->2...
 
 If we had group_total=4, it would look like this:
 

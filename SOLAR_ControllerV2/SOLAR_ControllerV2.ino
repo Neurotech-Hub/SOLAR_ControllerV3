@@ -11,7 +11,7 @@ const String CODE_VERSION = "1.001";
 // Pin assignments for ItsyBitsy M4
 const int dacPin = A0;          // DAC output (12-bit, 0-4095)
 const int servoPin = 5;        // Servo control
-const int ledPin = 13; // Status LED
+const int ledPin = 13;         // Status LED
 const int rxReadyPin = 7;      // Chain ready input
 const int txReadyPin = 9;      // Chain ready output
 const int userLedPin = 2;      // User LED
@@ -137,7 +137,7 @@ void setup()
 
     // Initialize Serial interfaces
     Serial.begin(115200); // USB
-    Serial1.begin(9600);  // Device chain
+    Serial1.begin(115200);  // Device chain
 
     // Wait for either Serial (master) or rxReadyPin (slave)
     while (!isMasterDevice)
@@ -434,7 +434,7 @@ void processCommand(String data)
             float current = cmd.value.toFloat();
             current = constrain(current, MIN_CURRENT_MA, MAX_CURRENT_MA);
             setTargetCurrent(current);
-            digitalWrite(userLedPin, current > 5 ? HIGH : LOW);
+            digitalWrite(userLedPin, targetCurrentMA > 0 ? HIGH : LOW);
             if (Serial)
             {
                 Serial.println("DEBUG: Target current: " + String(targetCurrentMA) + " mA");
@@ -760,7 +760,7 @@ void setTargetCurrent(float currentMA)
         analogWrite(dacPin, 0);
         digitalWrite(userLedPin, LOW);
         currentControlState = CURRENT_OFF;
-        Serial.println("Current control target set to 0 mA (DAC off)");
+        Serial.println("Current control target set to 0 mA");
     }
 }
 
@@ -781,6 +781,9 @@ void updateCurrentControl()
         endTime = micros();
         readTime = endTime - startTime;
 
+        if(currentDacValue < 1200){
+            currentDacValue = 1200;
+        }
         currentDacValue += (currentMA < targetCurrentMA) ? 1 : -1;
         currentDacValue = constrain(currentDacValue, dacMin, dacMax);
         // Check for voltage drop
@@ -794,7 +797,7 @@ void updateCurrentControl()
             emergencyShutdown();
         }
         analogWrite(dacPin, currentDacValue);
-        digitalWrite(userLedPin, currentMA > 5 ? HIGH : LOW);
+        digitalWrite(userLedPin, targetCurrentMA > 0 ? HIGH : LOW);
     }
 }
 

@@ -2,6 +2,8 @@
 
 A Python GUI application for controlling ItsyBitsy M4 boards in a daisy-chained round-robin communication system with INA226 current monitoring. This application provides precise control over servo motors and LED arrays through current-based control with real-time monitoring and safety features.
 
+![SOLAR Controller GUI Screenshot](docs/GUI_v1.png)
+
 ## Overview
 
 The SOLAR Controller GUI enables seamless control of multiple ItsyBitsy M4 boards arranged in a daisy chain. Each board can control a servo motor (60-120 degrees, safety limited) and an LED array via 12-bit DAC output with INA226 current monitoring (0-1500mA current control, safety limited). The system uses a round-robin communication protocol where commands are passed from one device to the next, allowing for both synchronized and individual device control with real-time current feedback.

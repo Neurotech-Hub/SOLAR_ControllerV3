@@ -19,8 +19,8 @@ from datetime import datetime
 class SOLARGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("SOLAR Controller GUI v1.001")
-        self.root.geometry("1000x850")
+        self.root.title("SOLAR Controller v1.001")
+        self.root.geometry("1000x880")
         
         # Serial communication
         self.serial_port = None
@@ -58,7 +58,7 @@ class SOLARGUI:
         main_frame.rowconfigure(1, weight=1)
         
         # Title
-        title_label = ttk.Label(main_frame, text="SOLAR Controller GUI", 
+        title_label = ttk.Label(main_frame, text="SOLAR Controller",
                                font=("Arial", 16, "bold"))
         title_label.grid(row=0, column=0, columnspan=2, pady=(0, 20))
         
@@ -439,7 +439,7 @@ class SOLARGUI:
             self.ina226_status = data.split(":")[1]
             self.ina226_label.config(text=self.ina226_status)
         elif data.startswith("EOT"):
-            self.log_message("✓ Command completed successfully")
+            self.log_message("✓ EOT")
         elif data.startswith("ERR:"):
             self.log_message(f"❌ Error: {data}")
         elif data.startswith("EMERGENCY:"):
@@ -608,7 +608,7 @@ class SOLARGUI:
                 if not self.demo_running:
                     break
                 self.root.after(0, self.send_command, f"000,current,{current}")
-                time.sleep(0.3)
+                time.sleep(5)
     
     def stop_demo(self):
         """Stop running demo"""
