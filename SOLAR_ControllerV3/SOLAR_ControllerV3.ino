@@ -62,8 +62,6 @@ int targetDacValue = 0;
 // Timing variables
 unsigned long programStartTime = 0;
 unsigned long programDuration = 0;
-bool programRunning = false;        // True when program is actively running
-bool firstCycleComplete = false;    // Track if first successful cycle completed
 
 // Volatile variables for interrupt handling
 volatile bool triggerStateChanged = false;
@@ -118,8 +116,6 @@ void setup()
     intensity = 0;
     current_group = 1;
     program_success = false;
-    programRunning = false;
-    firstCycleComplete = false;
 
     // Initialize Serial interfaces
     Serial.begin(115200); // USB
@@ -157,7 +153,7 @@ void loop()
     updateStatusLED();
 
     // Handle program execution timing (master only)
-    if (isMasterDevice && programRunning)
+    if (isMasterDevice && programDuration > 0)
     {
         handleProgramExecution();
     }
@@ -191,31 +187,7 @@ void loop()
                 emergencyShutdown();
                 return;
             }
-            else if (command == "stop")
-            {
-                Serial.println("DEBUG: Stopping continuous program");
-                
-                // Stop continuous program mode
-                programRunning = false;
-                programDuration = 0;
-                firstCycleComplete = false;
-                
-                // Ensure trigger line is HIGH (inactive)
-                digitalWrite(triggerOutPin, HIGH);
-                
-                // Turn off any active output on master
-                analogWrite(dacPin, 0);
-                digitalWrite(userLedPin, LOW);
-                
-                // Send stop command to all devices via DAC off
-                Serial1.println("000,dac,0");
-                
-                // Small delay to ensure command propagates
-                delay(50);
-                
-                Serial.println("PROGRAM_STOPPED");
-                return;
-            }
+
 
             // Parse and validate regular command
             Command cmd;
@@ -284,18 +256,16 @@ void loop()
             if (cmd.command == "start_program" && cmd.deviceId == 0)
             {
                 int duration = cmd.value.toInt();
-                Serial.println("DEBUG: Starting continuous program with pulse duration: " + String(duration) + "ms");
+                Serial.println("DEBUG: Starting program with duration: " + String(duration) + "ms");
                 
-                // Reset program flags
+                // Reset program success flag
                 program_success = false;
-                firstCycleComplete = false;
                 
-                // Start continuous program mode
+                // Start the program timing
                 programStartTime = millis();
                 programDuration = duration;
-                programRunning = true;
                 
-                // Immediately drive TRIGGER_OUT LOW to start the first pulse
+                // Immediately drive TRIGGER_OUT LOW to start the pulse
                 digitalWrite(triggerOutPin, LOW);
                 
                 // If master has a group assignment, activate it immediately
@@ -376,44 +346,18 @@ void triggerInterrupt()
 
 void handleProgramExecution()
 {
-    // Exit if program was stopped
-    if (!programRunning) {
-        return;
-    }
-    
-    // Check if current pulse duration has elapsed
+    // Check if program duration has elapsed
     if (millis() - programStartTime >= programDuration) {
-        // Drive TRIGGER_OUT HIGH to end the current pulse
+        // Drive TRIGGER_OUT HIGH to end the pulse
         digitalWrite(triggerOutPin, HIGH);
         
-        Serial.println("DEBUG: Pulse duration complete, TRIGGER_OUT driven HIGH");
+        // Reset program timing
+        programDuration = 0;
         
-        // Only print first cycle
-        if (!firstCycleComplete) {
-            Serial.println("Process_success:" + String(programRunning ? "true" : "false"));
-            firstCycleComplete = true;
-        }
+        Serial.println("DEBUG: Program duration complete, TRIGGER_OUT driven HIGH");
         
-        // Check again if program is still running before starting next cycle
-        if (!programRunning) {
-            Serial.println("DEBUG: Program stopped, exiting");
-            return;
-        }
-        
-        // Reset for next cycle
-        program_success = false;
-        
-        // Start the next pulse immediately
-        programStartTime = millis();
-        digitalWrite(triggerOutPin, LOW);
-        
-        // If master has a group assignment for current group, activate it
-        if (current_group == group_id && group_id > 0) {
-            analogWrite(dacPin, (int)intensity);
-            digitalWrite(userLedPin, HIGH);
-        }
-        
-        Serial.println("DEBUG: Starting next pulse cycle, TRIGGER_OUT driven LOW");
+        // Send acknowledgment with program success status
+        Serial.println("PROGRAM_ACK:" + String(program_success ? "true" : "false"));
     }
 }
 
@@ -696,8 +640,7 @@ void printHelp()
     Serial.println("UI:    xxx,dac,value   - Set DAC value directly (0-2000)");
     Serial.println("UI:  Program Control:");
     Serial.println("UI:    xxx,program,{group_id,group_total,intensity}");
-    Serial.println("UI:    000,start_program,duration_ms - Start continuous program (1-100ms pulse)");
-    Serial.println("UI:    stop - Stop continuous program");
+    Serial.println("UI:    000,start_program,duration_ms - Start program (1-100ms)");
     Serial.println("UI:  Where xxx is:");
     Serial.println("UI:    000 = all devices");
     Serial.println("UI:    001-" + String(totalDevices) + " = specific device");
@@ -708,8 +651,7 @@ void printHelp()
     Serial.println("UI:    emergency - Emergency shutdown (master only)");
     Serial.println("UI:  Examples:");
     Serial.println("UI:    000,program,{1,4,1400} - Set group 1 of 4, intensity 1400");
-    Serial.println("UI:    000,start_program,20   - Start continuous 20ms pulses");
-    Serial.println("UI:    stop                  - Stop continuous program");
+    Serial.println("UI:    000,start_program,20   - Start 20ms program pulse");
     Serial.println("UI:    001,servo,90          - Set device 1 servo to 90°");
 }
 
@@ -749,7 +691,6 @@ void printStatus()
     Serial.println("PROGRAM_TOTAL:" + String(group_total));
     Serial.println("PROGRAM_INTENSITY:" + String(intensity));
     Serial.println("CURRENT_GROUP:" + String(current_group));
-    Serial.println("PROGRAM_RUNNING:" + String(programRunning ? "true" : "false"));
     
     if (pendingCommand.length() > 0)
     {
@@ -811,11 +752,9 @@ void emergencyShutdown()
     currentDacValue = 0;
     targetDacValue = 0;
     
-    // Stop any running programs
-    programRunning = false;
-    programDuration = 0;
-    firstCycleComplete = false;
+    // Reset program variables
     intensity = 0;
+    programDuration = 0;
     
     // Ensure trigger line is HIGH (inactive)
     digitalWrite(triggerOutPin, HIGH);
