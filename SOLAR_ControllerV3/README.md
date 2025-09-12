@@ -69,10 +69,10 @@ Now, we will assign each device to its respective group, including its intensity
 
 1.  Send the following commands one by one:
     ```
-    001,program,{1,2,1500,30}
-    002,program,{2,2,1200,20}
-    003,program,{2,2,1200,20}
-    004,program,{1,2,1500,30}
+    001,program,{1,2,1700,30}
+    002,program,{2,2,1500,20}
+    003,program,{2,2,1500,20}
+    004,program,{1,2,1700,30}
     ```
 2.  You can confirm the setup by sending `status`.
 
