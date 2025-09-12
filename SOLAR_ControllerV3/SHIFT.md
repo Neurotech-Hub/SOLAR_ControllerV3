@@ -82,26 +82,28 @@ All devices will need to track 5 pieces of information (new variables, default t
 
 This should be established using the following command structure:
 
-000,program,{group_id,group_total,intensity}
+000,program,{group_id,group_total,intensity,duration}
 
 **Command Parsing for Curly Bracket Parameters:**
 ```cpp
 // Example parsing function for program command
-bool parseProgramCommand(String value, int &group_id, int &group_total, float &intensity) {
+bool parseProgramCommand(String value, int &group_id, int &group_total, float &intensity, int &duration) {
     // Remove curly brackets
     value = value.substring(1, value.length() - 1);
     
     // Split by comma
     int firstComma = value.indexOf(',');
-    int secondComma = value.indexOf(',', firstComma + 1);
+    int secondComma = value.indexOf(',', firstComma + 1);    
+    int thirdComma = value.indexOf(',', secondComma + 1);
     
-    if (firstComma == -1 || secondComma == -1) {
+    if (firstComma == -1 || secondComma == -1 || thirdComma == -1) {
         return false;
     }
     
     group_id = value.substring(0, firstComma).toInt();
     group_total = value.substring(firstComma + 1, secondComma).toInt();
-    intensity = value.substring(secondComma + 1).toFloat();
+    intensity = value.substring(secondComma + 1, thirdComma).toFloat();
+    duration = value.substring(thirdComma + 1).toInt();
     
     return true;
 }
@@ -109,23 +111,71 @@ bool parseProgramCommand(String value, int &group_id, int &group_total, float &i
 
 If `group_id` is set to 0, it shall not execute any program (see below). Therefore, group_ids begin at 1 for active modules.
 
+### Programming Consistency Check
+To ensure predictable behavior, all devices within the same `group_id` must have identical `intensity` and `duration` values. The master device will be responsible for caching the settings for each `group_id`.
+
+-   If a `program` command is sent for a new device in an existing group, its `intensity` and `duration` must match the cached values for that group.
+-   If the values do not match, the command will be rejected with an error, and the user will be prompted to send a valid command.
+
 ## Program Execution
 Assuming a 4 module system, first set the program for all devices:
-
-000,program,{1,4,1400}
-001,program,{2,4,1300}
-002,program,{1,4,1400}
-003,program,{2,4,1300}
+```
+001,program,{1,2,1500,30} 
+002,program,{2,2,1200,20} 
+003,program,{2,2,1200,20} 
+004,program,{1,2,1500,30} 
+```
 
 Devices 0 (master) and 2, and devices 1 and 3 are in the same group and will operate together. When a new program is set, a variable `current_group` is set to 1 (master and slaves). Here's how that works:
 
+## Frame Programing
+Frame programming allows for the execution of a defined program sequence for a specified number of cycles, or "frames". A single frame constitutes one full rotation through all the defined groups.
+
+To control the number of frames and the delay between them, the `frame` command is introduced:
+
+`000,frame,count,interframe_delay`
+
+-   `count`: The number of frames to execute.
+-   `interframe_delay`: The duration in milliseconds to hold the `TRIGGER_OUT` pin HIGH after each trigger pulse. This creates a pause between group activations.
+
+This command should be sent to all devices (broadcast address `000`).
+
+**How it works:**
+
+1.  Two new global variables are introduced: `frameCount` (default 1) and `interframeDelay` (default 10).
+2.  When the `frame,count,interframe_delay` command is received, these variables are updated.
+3.  The total number of execution loops is calculated as `totalLoops = frameCount * group_total`.
+4.  When the `start` command is sent to the master device, it will execute the trigger sequence `totalLoops` times.
+
+**Execution Flow:**
+
+When `start` is received, the master device will:
+1.  Calculate `totalLoops = frameCount * group_total`.
+2.  Reset `current_group` to 1.
+3.  For each loop from 1 to `totalLoops`:
+    a. Drive `TRIGGER_OUT` LOW for the `duration` specified in the `program` command for the `current_group`.
+    b. Drive `TRIGGER_OUT` HIGH for `interframeDelay` milliseconds to signal the end of the pulse.
+    c. This sequence triggers the group rotation on all devices.
+
+**Example:**
+
+Consider a system with `group_total = 2`.
+
+1.  Set the program for all devices (e.g., `000,program,{g_id,2,intensity,20}`).
+2.  Set 5 frames with a 50ms delay between triggers: `000,frame,5,50`.
+    *   This sets `frameCount = 5` and `interframeDelay = 50`.
+    *   `totalLoops` will be `5 * 2 = 10`.
+3.  Send the start command: `start`.
+4.  The master device will now generate 10 trigger pulses. Each pulse will be LOW for 20ms, followed by a HIGH state for 50ms. The group activation sequence will be: `1 -> 2 -> 1 -> 2 -> 1 -> 2 -> 1 -> 2 -> 1 -> 2`.
+This allows for precise control over the number of times the entire program sequence is repeated and the timing between each step.
+
 1. `program_success` begins as false (only tracker for master).
-2. The GUI will send a `start_program` command to the master device only with a specified duration in milliseconds (max 100ms): 000,start_program,20
-3. The master will immediately drive its TRIGGER_OUT pin LOW for the specified duration. This should propogate across the system via our interrupt system. The master device performs no action on receipt of a HIGH->LOW interupt.
-4. All devices will only implement their specified intensity based on circular state machine; the master will do this immediately upon receiving the serial command and slaves upon the transition from HIGH->LOW (on their interrupt). As described, the master will control the timing of the 'on' period of intensity via the TRIGGER line.
+2. The GUI will send a `start` command to the master device only.
+3. The master will immediately drive its TRIGGER_OUT pin LOW. The duration of this LOW state is determined by the `duration` value set for the currently active group (`current_group`) via the `program` command. This should propogate across the system via our interrupt system. The master device performs no action on receipt of a HIGH->LOW interupt.
+4. All devices will only implement their specified intensity and duration based on circular state machine; the master will do this immediately upon receiving the serial command and slaves upon the transition from HIGH->LOW (on their interrupt). As described, the master will control the timing of the 'on' period of intensity via the TRIGGER line.
 5. When the duration is complete on the master device, it will drive its TRIGGER_OUT line HIGH (progogating via onChange interrupts). Slave devices will immediately shut off their output and 'rotate' the current state. The master device will also 'rotate' current state when its TRIGGER_IN line goes LOW->HIGH and at that time, set `program_success` to true (this verifies the interrupt signal successfully went thru the entire system). 
 
-**Group Rotation Logic**: Devices only activate their intensity when `current_group` matches their `group_id`. When rotation occurs, `current_group` increments and wraps around to 1 when it exceeds `group_total`. In our 4 module setup (with group_total=2), `current_group` would 'rotate' as follows:
+**Group Rotation Logic**: Devices only activate their `intensity` and `duration` when `current_group` matches their `group_id`. When rotation occurs, `current_group` increments and wraps around to 1 when it exceeds `group_total`. In our 4 module setup (with group_total=2), `current_group` would 'rotate' as follows:
 
 1->2->1->2...
 
@@ -133,9 +183,30 @@ If we had group_total=4, it would look like this:
 
 1->2->3->4->1->2...
 
-6. The master will always acknowledge the `start_program` once complete with the program_success value (true or false). This will allow the GUI to pend on the acknowledgement and proceed if there were no errors.
+6. The master will always acknowledge the `start` once complete with the program_success value (true or false). This will allow the GUI to pend on the acknowledgement and proceed if there were no errors.
 
 Naturally, the `current_group` can be reset by re-sending the `program` command to each device.
+
+### Real-time Logging
+During program execution (after a `start` command is issued), the master device will provide real-time logging to the serial monitor for each trigger pulse. The format for this logging will be:
+
+`FRAME_{current_frame_count}: G_ID={current_group}, I={intensity}, D={duration}`
+-   `{current_frame_count}`: Active frame number from the loop.
+-   `{current_group}`: The group ID currently being activated.
+-   `{intensity}`: The intensity value for the active group.
+-   `{duration}`: The LOW pulse duration for the active group.
+
+### Status Command
+The `status` command provides a comprehensive overview of the system's current configuration. The master device will collect and display the following information:
+
+-   **Total number of groups:** `GROUP_TOTAL: {group_total}`
+-   **Frame programming settings:**
+    -   `FRAME_COUNT: {frameCount}`
+    -   `INTERFRAME_DELAY: {interframeDelay}`
+-   **Per-device status:** For each device in the chain, a line will be printed in the format:
+    `DEV:{device_id}, G_ID:{group_id}, I:{intensity}, D:{duration}`
+
+To implement this, the master will need to cache the `group_id`, `intensity`, and `duration` for each `device_id`.
 
 ## Implementation Checklist
 
@@ -148,7 +219,8 @@ Naturally, the `current_group` can be reset by re-sending the `program` command 
 **Phase 2: Command Parsing**
 - [ ] Implement parseProgramCommand() function for curly bracket parsing
 - [ ] Add "program" command handling to processCommand()
-- [ ] Add "start_program" command handling to processCommand()
+- [ ] Add "frame" command handling to processCommand()
+- [ ] Add "start" command handling to processCommand()
 - [ ] Test command parsing with malformed input handling
 
 **Phase 3: Program Execution**
@@ -167,4 +239,5 @@ Naturally, the `current_group` can be reset by re-sending the `program` command 
 **Error Handling:**
 - [ ] Malformed program command structure (invalid curly brackets, missing parameters)
 - [ ] Invalid group_id or group_total values
-- [ ] Duration timeout handling for start_program
+- [ ] Duration timeout handling for start
+- [ ] Mismatched intensity/duration for devices in the same group_id

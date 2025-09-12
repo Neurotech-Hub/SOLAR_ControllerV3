@@ -26,28 +26,30 @@ These commands are simple, single-word commands.
 | `status`    | Asks the master to print its current status, including device count and program variables.                 |
 | `help`      | Prints a list of all available commands and examples.                                                   |
 | `emergency` | Immediately shuts down all DAC outputs on all devices.                                                  |
+| `start`     | Starts the pre-configured program execution based on the `program` and `frame` settings.               |
 
 ### Device Commands
 
 These commands follow the format `deviceId,command,value`.
 
-| Command Syntax                                  | Description                                                                                                                                                                                                                                     |
-| :---------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `xxx,program,{g_id,g_total,intensity}`          | Programs a device. `xxx` is the device ID. `g_id` is the group this device belongs to. `g_total` is the **total number of groups** in the system. `intensity` is the DAC value (0-2000). |
-| `000,start_program,duration`                    | **Master only.** Starts a single timed pulse. `duration` is the pulse length in milliseconds (1-100). This command executes one pulse for the `current_group` and then rotates the system to the next group. |
-| `xxx,servo,angle`                               | Sets the servo position. `angle` is 60-120 degrees.                                                                                                                                                                                             |
-| `xxx,dac,value`                                 | Directly sets the DAC output. `value` is 0-2000. This bypasses any programmed intensity.                                                                                                                                                        |
+| Command Syntax | Description |
+| :--- | :--- |
+| `xxx,program,{g_id,g_total,intensity,duration}` | Programs a device. `xxx` is the device ID (or `000` for all). `g_id` is the group this device belongs to (1-based). `g_total` is the **total number of unique groups** in the system. `intensity` is the DAC value (0-4095) for now. `duration` is the pulse length in milliseconds (1-100ms) for this group. |
+| `frame,count,interframe_delay` | **Master only.** Configures the program execution frames. `count` is the number of times the entire group sequence will be repeated. `interframe_delay` is the pause in milliseconds between each group activation. |
+| `xxx,servo,angle` | Sets the servo position. `angle` is 60-120 degrees. |
+| `xxx,dac,value` | Directly sets the DAC output. `value` is 0-4095. This bypasses any programmed intensity. |
 
 ---
 
 ## Example Usage: 4-Device, 2-Group Setup
 
-This example walks you through setting up and running a sequential program on four devices.
+This example walks you through setting up and running an automated, multi-frame sequence on four devices.
 
 **Goal:**
-*   Devices #1 and #4 are in **Group 1**.
-*   Devices #2 and #3 are in **Group 2**.
-*   The system will flash Group 1, then Group 2, then Group 1, etc., with each pulse command.
+*   Devices #1 and #4 are in **Group 1** with an intensity of 1700 and a 30ms pulse duration.
+*   Devices #2 and #3 are in **Group 2** with an intensity of 1500 and a 20ms pulse duration.
+*   The system will automatically cycle through the sequence: Group 1 -> Group 2.
+*   This entire sequence will repeat 5 times, with a 50ms delay between each group activation.
 
 ### Step 1: Initialization
 
@@ -63,37 +65,41 @@ Connect all 4 devices as described in the wiring instructions. Power them on and
 
 ### Step 2: Program the Groups
 
-Now, we will assign each device to its respective group. The crucial part is to set `group_total` to `2` for all devices, since we are only using two groups.
+Now, we will assign each device to its respective group, including its intensity and pulse duration. Note that `group_total` is set to `2` for all devices.
 
 1.  Send the following commands one by one:
     ```
-    001,program,{1,2,1500}
-    002,program,{2,2,1200}
-    003,program,{2,2,1200}
-    004,program,{1,2,1500}
+    001,program,{1,2,1500,30}
+    002,program,{2,2,1200,20}
+    003,program,{2,2,1200,20}
+    004,program,{1,2,1500,30}
     ```
-2.  You can confirm the setup by sending `status`. The master should report `CURRENT_GROUP:1` and `PROGRAM_TOTAL:2`.
+2.  You can confirm the setup by sending `status`.
 
-### Step 3: Run the Program Sequentially
+### Step 3: Configure the Frame Execution
 
-Each time you send `start_program`, the system will fire one pulse and automatically advance to the next group.
+Set the program to run for 5 frames (meaning the full 1->2 group sequence will run 5 times) with a 50ms delay between each pulse.
 
-1.  **Send Pulse 1:**
+1.  Send the `frame` command:
     ```
-    000,start_program,50
+    frame,5,50
     ```
-    *   **Result:** The LEDs on devices #1 and #4 (Group 1) will flash for 50ms. The master will reply `PROGRAM_ACK:true`.
+2.  The master will confirm the settings.
+    **Expected Output:** `FRAME_SET:5,50`
 
-2.  **Send Pulse 2:**
-    ```
-    000,start_program,50
-    ```
-    *   **Result:** The LEDs on devices #2 and #3 (Group 2) will flash for 50ms. The system has successfully rotated to the next group.
+### Step 4: Run the Program
 
-3.  **Send Pulse 3:**
-    ```
-    000,start_program,50
-    ```
-    *   **Result:** The LEDs on devices #1 and #4 (Group 1) will flash again. The system has wrapped around back to the first group.
+Now, simply start the entire pre-configured sequence.
 
-You can continue sending the `start_program` command to cycle through the groups indefinitely.
+1.  Send the `start` command:
+    ```
+    start
+    ```
+2.  **Result:** The master device will now take control. You will see real-time logging in the serial monitor as it executes the program.
+    *   Group 1 (Devs 1 & 4) will activate for 30ms.
+    *   The system will pause for 50ms.
+    *   Group 2 (Devs 2 & 3) will activate for 20ms.
+    *   The system will pause for 50ms.
+    *   This cycle will repeat for a total of 5 frames (10 total pulses) with 50ms interframe delay.
+3.  Once complete, the master will report the final status.
+    **Expected Output:** `PROGRAM_ACK:true` (if the trigger signal completed the chain successfully).
