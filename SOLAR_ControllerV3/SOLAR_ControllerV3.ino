@@ -319,7 +319,7 @@ void loop()
             {
                 Serial.println("ERR:INVALID_FORMAT");
                 Serial.println("UI:Use format: deviceId,command,value");
-                Serial.println("UI:Example: 001,servo,90 or 000,program,{1,4,1400,20} (duration: 1-100ms)");
+                Serial.println("UI:Example: 001,servo,90 or 001,program,{1,4,1400,20} (duration: 1-100ms)");
                 return;
             }
 
@@ -838,7 +838,7 @@ void printHelp()
     Serial.println("UI:    reinit   - Restart device initialization");
     Serial.println("UI:    emergency - Emergency shutdown (master only)");
     Serial.println("UI:  Examples:");
-    Serial.println("UI:    000,program,{1,4,1400,20} - Set group 1 of 4, intensity 1400, duration 20ms");
+    Serial.println("UI:    001,program,{1,2,1400,20} - Set device 1 group 1 of 2, intensity 1400, duration 20ms");
     Serial.println("UI:    frame,5,50              - Set 5 frames with 50ms interframe delay");
     Serial.println("UI:    start                   - Start program execution");
     Serial.println("UI:    001,servo,90            - Set device 1 servo to 90°");
