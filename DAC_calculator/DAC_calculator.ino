@@ -6,8 +6,8 @@
  * - dac,[dac_value],[current_value]: Start DAC with initial value and maintain target current
  * 
  * INA226 Configuration:
- * - Conversion time: 1.1ms (1100us) for both bus and shunt voltage
- * - Averaging: 4 samples
+ * - Conversion time: 140us for both bus and shunt voltage
+ * - Averaging: 1 sample
  * - Mode: Continuous shunt and bus voltage measurement
  * - Optimized for current-only readings
  */
@@ -54,7 +54,9 @@ int calculateDacReduction(float currentReading, float targetCurrent) {
   float overcurrent = currentReading - targetCurrent;
   
   
-  if (overcurrent >= 200.0) {
+  if (overcurrent >= 500.0) {
+    return 100;  // 500mA or more: reduce by 100
+  } else if (overcurrent >= 200.0) {
     return 50;  // 200mA or more: reduce by 50
   } else if (overcurrent >= 100.0) {
     return 20;  // 100mA or more: reduce by 15
@@ -186,17 +188,13 @@ void loop()
 
   // Control loop
   if (targetCurrent_mA > 0 && !shouldTerminate)
-  {
-    if (!ina226.waitConversionReady())
-    {
-      Serial.println("Timeout!");
-      return;
-    }
-
+  {               
     startTime = micros();
-    current = ina226.getCurrent_mA();
-    endTime = micros();
-    readTime = endTime - startTime;
+    if (ina226.waitConversionReady(1)) {
+      current = ina226.getCurrent_mA();
+      endTime = micros();
+      readTime = endTime - startTime;
+    }
 
     if (isCurrentCommand) {
       if (!targetReached && current >= targetCurrent_mA) {
@@ -206,7 +204,7 @@ void loop()
         Serial.print(targetReachedTime - commandStartTime);
         Serial.println(" ms");
       }
-      if (targetReached && (millis() - targetReachedTime >= 50)) {
+      if (targetReached && (millis() - targetReachedTime >= 30)) {
         shouldTerminate = true;
         Serial.println("=== RESULTS ===");
         Serial.print("Current (mA): "); Serial.println(current);
@@ -221,11 +219,11 @@ void loop()
       if (!safeMarginReached && current >= safe_margin_mA) {
         safeMarginReachedTime = millis();
         safeMarginReached = true;
-        Serial.print("Safe margin: ");
+        Serial.print("Exposure time: ");
         Serial.print(safeMarginReachedTime - commandStartTime);
         Serial.println(" ms");
       }
-      if (safeMarginReached && (millis() - safeMarginReachedTime >= 50)) {
+      if (safeMarginReached && (millis() - safeMarginReachedTime >= 30)) {
         shouldTerminate = true;
         Serial.println("=== RESULTS ===");
         Serial.print("Current (mA): "); Serial.println(current);
@@ -291,8 +289,8 @@ bool initializeINA226()
   if (!ina226.begin()) return false;
 
   ina226.setAverage(0x01);
-  ina226.setBusVoltageConversionTime(0x04);
-  ina226.setShuntVoltageConversionTime(0x04);
+  ina226.setBusVoltageConversionTime(0x01);
+  ina226.setShuntVoltageConversionTime(0x01);
   ina226.setMode(0x07);
 
   if (!calculateCalibration()) return false;
