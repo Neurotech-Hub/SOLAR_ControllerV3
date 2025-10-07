@@ -6,7 +6,7 @@
 #include <Wire.h>
 
 // Version tracking
-const String CODE_VERSION = "3.21";
+const String CODE_VERSION = "3.25";
 
 // Pin assignments for ItsyBitsy M4
 const int dacPin = A0;          // DAC output (12-bit, 0-4095)
@@ -95,6 +95,7 @@ DeviceStatus deviceCache[MAX_DEVICES]; // Dynamic device cache based on totalDev
 // DAC control variables
 int currentDacValue = 0;
 int targetDacValue = 0;
+int last_adjusted_dac = 0;      // Stores last non-zero DAC value before pulse end (0 = not yet set)
 
 // Timing variables
 unsigned long programStartTime = 0;
@@ -119,6 +120,7 @@ void emergencyShutdown();
 void triggerInterrupt();
 void handleProgramExecution();
 bool getGroupSettings(int group_id, float &group_dac, int &group_exposure);
+bool validateGroupExposures();
 bool initializeINA226();
 bool calculateCalibration();
 int calculateDacReduction(float currentReading, float targetCurrent);
@@ -154,26 +156,35 @@ bool calculateCalibration() {
 }
 
 int calculateDacReduction(float currentReading, float targetCurrent) {
-    float overcurrent = currentReading - targetCurrent;
+    if (targetCurrent <= 0) return 0;  // Avoid division by zero
     
-    if (overcurrent >= 500.0) {
-        return 100;  // 500mA or more: reduce by 100
-    } else if (overcurrent >= 200.0) {
-        return 50;   // 200mA or more: reduce by 50
-    } else if (overcurrent >= 100.0) {
-        return 20;   // 100mA or more: reduce by 20
-    } else if (overcurrent >= 50.0) {
-        return 10;   // 50mA or more: reduce by 10
-    } else if (overcurrent >= 40.0) {
-        return 5;    // 40mA or more: reduce by 5
-    } else if (overcurrent >= 30.0) {
-        return 4;    // 30mA or more: reduce by 4
-    } else if (overcurrent >= 20.0) {
-        return 3;    // 20-29mA: reduce by 3
-    } else if (overcurrent >= 10.0) {
-        return 2;    // 10-19mA: reduce by 2
+    float percentageOver = ((currentReading - targetCurrent) / targetCurrent) * 100.0;
+    
+    // If current > target_current*n% then reduce by n/2 points
+    if (percentageOver >= 50.0) {
+        return 50;  // 50% or more: reduce by 100 points
+    } else if (percentageOver >= 40.0) {
+        return 25;   // 40% or more: reduce by 25 points
+    } else if (percentageOver >= 30.0) {
+        return 20;   // 30% or more: reduce by 20 points
+    } else if (percentageOver >= 20.0) {
+        return 15;   // 20% or more: reduce by 15 points
+    } else if (percentageOver >= 14.0) {
+        return 10;   // 14% or more: reduce by 10 points
+    } else if (percentageOver >= 12.0) {
+        return 7;    // 12% or more: reduce by 7 points
+    } else if (percentageOver >= 10.0) {
+        return 6;    // 10% or more: reduce by 6 points
+    } else if (percentageOver >= 8.0) {
+        return 5;    // 8% or more: reduce by 5 points
+    } else if (percentageOver >= 6.0) {
+        return 4;    // 6% or more: reduce by 4 points
+    } else if (percentageOver >= 4.0) {
+        return 3;    // 4% or more: reduce by 3 points
+    } else if (percentageOver >= 2.5) {
+        return 2;    // 2.5% or more: reduce by 2 points
     } else {
-        return 0;    // Less than 10mA: no reduction
+        return 0;    // Less than 2%: no reduction needed
     }
 }
 
@@ -204,6 +215,7 @@ void setup()
     // Reset all control variables to safe state
     currentDacValue = 0;
     targetDacValue = 0;
+    last_adjusted_dac = 0;
 
     // Initialize program variables
     group_id = 0;
@@ -328,11 +340,20 @@ void loop()
                 Serial.println("DEBUG: Starting frame-based program execution");
                 Serial.println("DEBUG: Frame count: " + String(frameCount) + ", Interframe delay: " + String(interframeDelay) + "ms");
                 
+                // Validate that all devices in each group have the same exposure time
+                if (!validateGroupExposures()) {
+                    Serial.println("ERR:EXPOSURE_MISMATCH");
+                    Serial.println("UI:All devices in a group must have the same exposure time");
+                    Serial.println("UI:Check status command to see programmed values");
+                    return;
+                }
+                
                 // Reset program success flag and frame execution state
                 program_success = false;
                 frameExecutionActive = true;
                 currentFrameLoop = 1;
                 inPulsePhase = true;
+                last_adjusted_dac = 0;  // Reset for new sequence (0 = first frame)
                 
                 // Calculate total loops needed
                 totalLoops = frameCount * group_total;
@@ -369,7 +390,8 @@ void loop()
                     
                     // If master has a group assignment for this group, enable closeloop
                     if (current_group == group_id && group_id > 0) {
-                        current_dac_value = (int)initial_dac;
+                        // Use initial_dac for first frame (last_adjusted_dac==0), last_adjusted_dac for subsequent frames
+                        current_dac_value = (last_adjusted_dac > 0) ? last_adjusted_dac : (int)initial_dac;
                         closeloop_active = true;  // Enable closeloop
                     }
                     
@@ -521,7 +543,7 @@ void loop()
         {
             if (isMasterDevice)
             {
-                Serial.println("DEBUG: Received from chain: " + data);
+                // Serial.println("DEBUG: Received from chain: " + data);
             }
             processCommand(data);
         }
@@ -545,22 +567,24 @@ void triggerInterrupt()
     if (triggerState == LOW && lastTriggerState == HIGH) {
         // HIGH->LOW transition: Enable closeloop control
         if (current_group == group_id && group_id > 0) {
-            current_dac_value = (int)initial_dac;  // Set initial DAC value
+            // Use initial_dac for first frame (last_adjusted_dac==0), last_adjusted_dac for subsequent frames
+            current_dac_value = (last_adjusted_dac > 0) ? last_adjusted_dac : (int)initial_dac;
             closeloop_active = true;                // Activate closeloop
         }
     } else if (triggerState == HIGH && lastTriggerState == LOW) {
-        // LOW->HIGH transition: Disable closeloop
+        // LOW->HIGH transition: Record DAC before disabling closeloop
+        if (current_dac_value > 0 && closeloop_active) {
+            last_adjusted_dac = current_dac_value;  // Record last DAC value
+        }
         closeloop_active = false;  // Deactivate closeloop
         
-        // Rotate to next group
-        current_group++;
-        if (current_group > group_total) {
-            current_group = 1;
-        }
-        
-        // Master sets program_success when signal completes full cycle
-        if (isMasterDevice) {
-            program_success = true;
+        // Only slave devices rotate to next group based on trigger signal
+        // Master device handles current_group updates in handleProgramExecution()
+        if (!isMasterDevice) {
+            current_group++;
+            if (current_group > group_total) {
+                current_group = 1;
+            }
         }
     }
     
@@ -572,6 +596,7 @@ void handleCurrentControl() {
     if (!closeloop_active) {
         // Closeloop is disabled - ensure DAC is off
         if (current_dac_value > 0) {
+            last_adjusted_dac = current_dac_value;
             analogWrite(dacPin, 0);
             current_dac_value = 0;
             
@@ -609,6 +634,7 @@ void handleCurrentControl() {
     if (ina226.waitConversionReady(1)) {
         // Read current feedback from INA226
         measured_current_mA = ina226.getCurrent_mA();
+        Serial.print("DEBUG: I: "); Serial.print(measured_current_mA); Serial.print("(mA) | DAC: "); Serial.println(current_dac_value);
         
         // CRITICAL: Emergency shutdown check - current > maxCurrent * 1.01
         if (measured_current_mA > (maxCurrent_mA * 1.01)) {
@@ -626,15 +652,9 @@ void handleCurrentControl() {
             if (isMasterDevice) {
                 Serial.println("DEBUG: Broadcasting emergency shutdown");
                 Serial1.println("000,dac,0");
-                
-                // Halt master system - requires reinit to recover
-                while (true) {
-                    digitalWrite(ledPin, (millis() / 100) % 2); // Very fast blink
-                    delay(10);
-                }
             }
             
-            // Slave devices shutdown but don't halt (master will reinit)
+            // Slave devices shutdown (master will reinit)
             return;
         }
         
@@ -677,6 +697,10 @@ void handleProgramExecution()
         
         if (inPulsePhase) {
             // Pulse phase complete - end the pulse and start interframe delay
+            // Master: Record DAC value before ending pulse if active in current group
+            if (group_id == current_group && group_id > 0 && current_dac_value > 0 && closeloop_active) {
+                last_adjusted_dac = current_dac_value;
+            }
             digitalWrite(triggerOutPin, HIGH);
             // Serial.println("DEBUG: Pulse complete, starting interframe delay of " + String(interframeDelay) + "ms");
             
@@ -692,14 +716,27 @@ void handleProgramExecution()
             // Check if all loops are complete
             if (currentFrameLoop > totalLoops) {
                 // All frames complete - send final TRIGGER_OUT HIGH to turn off last group
+                // Master: Record DAC value before ending final pulse if active in last group
+                if (group_id == current_group && group_id > 0 && current_dac_value > 0 && closeloop_active) {
+                    last_adjusted_dac = current_dac_value;
+                }
                 digitalWrite(triggerOutPin, HIGH);
                 Serial.println("DEBUG: All frames complete, final TRIGGER_OUT HIGH sent");
+                
+                // Program completed successfully
+                program_success = true;
                 
                 // Clean up
                 frameExecutionActive = false;
                 programDuration = 0;
                 Serial.println("PROGRAM_ACK:" + String(program_success ? "true" : "false"));
                 return;
+            }
+            
+            // Master device: Update current_group to stay synchronized with slaves
+            current_group++;
+            if (current_group > group_total) {
+                current_group = 1;
             }
             
             // Get group-specific settings for current group
@@ -732,7 +769,8 @@ void handleProgramExecution()
                 
                 // If master has a group assignment for current group, enable closeloop
                 if (current_group == group_id && group_id > 0) {
-                    current_dac_value = (int)initial_dac;
+                    // Use initial_dac for first frame (last_adjusted_dac==0), last_adjusted_dac for subsequent frames
+                    current_dac_value = (last_adjusted_dac > 0) ? last_adjusted_dac : (int)initial_dac;
                     closeloop_active = true;  // Enable closeloop
                 }
                 
@@ -892,7 +930,7 @@ void processCommand(String data)
             digitalWrite(userLedPin, value > 1200 ? HIGH : LOW);
             if (Serial)
             {
-                Serial.println("DEBUG: Target DAC:" + String(value));
+                // Serial.println("DEBUG: Target DAC:" + String(value));
             }
         }
     }
@@ -1061,7 +1099,7 @@ void printHelp()
     Serial.println("UI:    xxx,program,{group_id,group_total,dac,current,exposure}");
     Serial.println("UI:      - group_id: Group number (1-n)");
     Serial.println("UI:      - group_total: Total groups");
-    Serial.println("UI:      - dac: Initial DAC value (0-4095)");
+    Serial.println("UI:      - dac: Initial DAC value (0-2000)");
     Serial.println("UI:      - current: Target current in mA (0-1500)");
     Serial.println("UI:      - exposure: Duration in ms (1-100)");
     Serial.println("UI:    frame,count,interframe_delay - Set frame parameters");
@@ -1075,8 +1113,8 @@ void printHelp()
     Serial.println("UI:    reinit   - Restart device initialization");
     Serial.println("UI:    emergency - Emergency shutdown (master only)");
     Serial.println("UI:  Examples:");
-    Serial.println("UI:    001,program,{1,2,1806,1300,20}");
-    Serial.println("UI:      Device 1, group 1 of 2, DAC=1806, I=1300mA, 20ms exposure");
+    Serial.println("UI:    001,program,{1,2,1808,1300,20}");
+    Serial.println("UI:      Device 1, group 1 of 2, DAC=1808, I=1300mA, 20ms exposure");
     Serial.println("UI:    frame,5,50              - Set 5 frames with 50ms interframe delay");
     Serial.println("UI:    start                   - Start program execution");
     Serial.println("UI:    001,servo,90            - Set device 1 servo to 90°");
@@ -1193,6 +1231,7 @@ void emergencyShutdown()
     // Reset control variables
     currentDacValue = 0;
     targetDacValue = 0;
+    last_adjusted_dac = 0;
     
     // Reset program variables
     initial_dac = 0;
@@ -1232,4 +1271,67 @@ bool getGroupSettings(int group_id, float &group_dac, int &group_exposure)
     group_dac = 0;
     group_exposure = 10;
     return false;
+}
+
+// Function to validate that all devices in each group have the same exposure time
+bool validateGroupExposures()
+{
+    // Array to store first exposure value found for each group
+    int groupExposures[MAX_DEVICES];  // Index by group_id-1
+    bool groupHasDevices[MAX_DEVICES]; // Track if group has any devices
+    
+    // Initialize arrays
+    for (int i = 0; i < MAX_DEVICES; i++) {
+        groupExposures[i] = -1;  // -1 means not set yet
+        groupHasDevices[i] = false;
+    }
+    
+    // Check all programmed devices
+    bool hasAnyProgrammedDevices = false;
+    for (int i = 0; i < totalDevices && i < MAX_DEVICES; i++) {
+        if (deviceCache[i].isSet && deviceCache[i].group_id > 0) {
+            hasAnyProgrammedDevices = true;
+            int gid = deviceCache[i].group_id;
+            
+            // Validate group_id is within bounds
+            if (gid < 1 || gid > MAX_DEVICES) {
+                Serial.println("ERROR: Device " + String(i + 1) + " has invalid group_id: " + String(gid));
+                return false;
+            }
+            
+            int exposure = deviceCache[i].exposure;
+            
+            // Check if this is the first device we've seen for this group
+            if (groupExposures[gid - 1] == -1) {
+                // First device in this group - store its exposure
+                groupExposures[gid - 1] = exposure;
+                groupHasDevices[gid - 1] = true;
+            } else {
+                // Not the first device - compare exposure with stored value
+                if (groupExposures[gid - 1] != exposure) {
+                    // Mismatch found!
+                    Serial.println("ERROR: Exposure mismatch in Group " + String(gid));
+                    
+                    // List all devices in this group with their exposures
+                    Serial.println("ERROR: Devices in Group " + String(gid) + ":");
+                    for (int j = 0; j < totalDevices && j < MAX_DEVICES; j++) {
+                        if (deviceCache[j].isSet && deviceCache[j].group_id == gid) {
+                            Serial.println("  Device " + String(j + 1) + ": " + String(deviceCache[j].exposure) + "ms");
+                        }
+                    }
+                    return false;
+                }
+            }
+        }
+    }
+    
+    // Check if any devices are programmed
+    if (!hasAnyProgrammedDevices) {
+        Serial.println("ERROR: No devices programmed. Use program command first.");
+        return false;
+    }
+    
+    // All validation passed
+    Serial.println("DEBUG: Group exposure validation passed");
+    return true;
 }

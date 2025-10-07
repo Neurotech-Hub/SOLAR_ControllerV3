@@ -25,7 +25,7 @@ float shuntResistance = 0.04195; // 42mΩ shunt
 float maxCurrent_mA = 1500;      // 1.5A max current to stay within 81.9mV shunt voltage limit
 float current = 0.0;
 float targetCurrent_mA = 0; // Target current in mA
-int currentDacValue = 1250;    // Current DAC value (0-4095)
+int currentDacValue = 1300;    // Current DAC value (0-4095)
 const int dacMin = 0;       // Minimum DAC value
 const int dacMax = 1900;    // Maximum DAC value
 int parsedDACValue = 0;
@@ -49,29 +49,37 @@ bool targetReached = false;                 // Flag to track if we've reached ta
 bool shouldTerminate = false;               // Flag to indicate loop should terminate
 bool isCurrentCommand = false;              // Flag to distinguish between current and dac commands
 
-// Helper function to calculate DAC reduction based on overcurrent amount
+// Helper function to calculate DAC reduction based on percentage overcurrent
 int calculateDacReduction(float currentReading, float targetCurrent) {
-  float overcurrent = currentReading - targetCurrent;
+  if (targetCurrent <= 0) return 0;  // Avoid division by zero
   
+  float percentageOver = ((currentReading - targetCurrent) / targetCurrent) * 100.0;
   
-  if (overcurrent >= 500.0) {
-    return 100;  // 500mA or more: reduce by 100
-  } else if (overcurrent >= 200.0) {
-    return 50;  // 200mA or more: reduce by 50
-  } else if (overcurrent >= 100.0) {
-    return 20;  // 100mA or more: reduce by 15
-  } else if (overcurrent >= 50.0) {
-    return 10;  // 50mA or more: reduce by 10
-  } else if (overcurrent >= 40.0) {
-    return 5;  // 40mA or more: reduce by 5
-  } else if (overcurrent >= 30.0) {
-    return 4;  // 30mA or more: reduce by 4
-  } else if (overcurrent >= 20.0) {
-    return 3;  // 20-29mA: reduce by 3
-  } else if (overcurrent >= 10.0) {
-    return 2;  // 10-19mA: reduce by 2
+  // If current > target_current*n% then reduce by n/2 points
+  if (percentageOver >= 50.0) {
+      return 50;  // 50% or more: reduce by 100 points
+  } else if (percentageOver >= 40.0) {
+      return 25;   // 40% or more: reduce by 25 points
+  } else if (percentageOver >= 30.0) {
+      return 20;   // 30% or more: reduce by 20 points
+  } else if (percentageOver >= 20.0) {
+      return 15;   // 20% or more: reduce by 15 points
+  } else if (percentageOver >= 14.0) {
+      return 10;   // 14% or more: reduce by 10 points
+  } else if (percentageOver >= 12.0) {
+      return 7;    // 12% or more: reduce by 7 points
+  } else if (percentageOver >= 10.0) {
+      return 6;    // 10% or more: reduce by 6 points
+  } else if (percentageOver >= 8.0) {
+      return 5;    // 8% or more: reduce by 5 points
+  } else if (percentageOver >= 6.0) {
+      return 4;    // 6% or more: reduce by 4 points
+  } else if (percentageOver >= 4.0) {
+      return 3;    // 4% or more: reduce by 3 points
+  } else if (percentageOver >= 2.5) {
+      return 2;    // 2.5% or more: reduce by 2 points
   } else {
-    return 0;  // Less than 10mA: no reduction needed
+      return 0;    // Less than 2%: no reduction needed
   }
 }
 
@@ -226,7 +234,8 @@ void loop()
       if (safeMarginReached && (millis() - safeMarginReachedTime >= 30)) {
         shouldTerminate = true;
         Serial.println("=== RESULTS ===");
-        Serial.print("Current (mA): "); Serial.println(current);
+        Serial.print("Current (mA): "); Serial.println(current);        
+        Serial.print("Target (mA): "); Serial.println(targetCurrent_mA);
         Serial.print("DAC: "); Serial.println(parsedDACValue);
         Serial.print("Time (ms): "); Serial.println(safeMarginReachedTime - commandStartTime);
         Serial.println("===============");
@@ -241,12 +250,7 @@ void loop()
       if (current < targetCurrent_mA) {
         currentDacValue++;
       } else if (current > targetCurrent_mA) {
-        int reduction = calculateDacReduction(current, targetCurrent_mA);
-        if (reduction > 0) {
-          currentDacValue -= reduction;
-        } else {
-          currentDacValue--;
-        }
+        currentDacValue--;
       }
     } else {
       if (current >= current_limit_mA) {

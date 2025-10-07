@@ -384,6 +384,6 @@ To implement this, the master will need to cache the `group_id`, `dac`, `current
 - [x] Invalid group_id or group_total values
 - [x] Duration timeout handling for start
 - [x] Mismatched dac/current/exposure for devices in the same group_id
-- [ ] INA226 initialization failure (halt system with error)
+- [ ] INA226 initialization failure
 - [ ] Current sensor read failures during operation
 - [ ] Emergency shutdown coordination across device chain
