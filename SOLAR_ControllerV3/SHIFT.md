@@ -147,10 +147,6 @@ Each device must have an INA226 current sensor connected via I2C (address 0x4A) 
 - **Update Rate:** As fast as conversion ready (checked with `waitConversionReady(1)` - 1ms timeout)
 - **Active Period:** Only during LED exposure window (when userLedPin is HIGH)
 - **DAC Adjustment:** Uses proportional reduction algorithm from DAC_Calculator
-  - Overcurrent ≥500mA: reduce DAC by 100
-  - Overcurrent ≥200mA: reduce DAC by 50
-  - Overcurrent ≥100mA: reduce DAC by 20
-  - Under target: increment DAC by 1
 
 ### Overcurrent Protection
 - **Emergency Shutdown:** Immediate shutdown if current > maxCurrent × 1.01 (1515mA)
@@ -168,7 +164,7 @@ The closeloop is implemented in the `handleCurrentControl()` function, called fr
 6. Checks for emergency conditions (>1515mA)
 7. Calculates DAC adjustment based on current feedback
 8. Updates DAC output (ONLY place DAC is set during operation)
-9. Updates `userLedPin` to reflect DAC state (HIGH when DAC>0, LOW when DAC=0)
+9. Updates `userLedPin` to reflect Current (HIGH when activeCurrent>1, LOW when activeCurrent<1 || DAC=0)
 
 **Critical Rules for DAC Control:**
 - **DAC is NEVER set outside `handleCurrentControl()`** during closeloop operation
@@ -178,9 +174,9 @@ The closeloop is implemented in the `handleCurrentControl()` function, called fr
   - Interrupt handler sets `closeloop_active = false` when TRIGGER_OUT goes HIGH (exposure ends)
   - Closeloop immediately stops when `closeloop_active = false`
 - **userLedPin as Visual Indicator:**
-  - `userLedPin` is updated in `handleCurrentControl()` only on DAC state changes
-  - HIGH when DAC transitions from 0 to non-zero
-  - LOW when DAC transitions from non-zero to 0
+  - `userLedPin` is updated in `handleCurrentControl()` only on current readings
+  - HIGH when activeCurrent > 1mA
+  - LOW when activeCurrent < 1 or DAC=0
   - Provides visual feedback of LED activity
 - All DAC updates are dynamically controlled by real-time current feedback
 - No DAC value is transmitted without active INA226 feedback
@@ -189,9 +185,6 @@ The closeloop is implemented in the `handleCurrentControl()` function, called fr
 - First call to `handleCurrentControl()` applies initial DAC and begins regulation
 
 **End-of-Program Safety (Fix for Last Group Issue):**
-- **Problem:** Last active group's DAC remains ON after program completion because no trigger HIGH is sent
-- **Solution:** Master ensures final TRIGGER_OUT HIGH pulse after last exposure completes
-- **Implementation:**
   - After final frame's exposure duration, master sets TRIGGER_OUT HIGH
   - This propagates through interrupt chain to all devices
   - All devices with `closeloop_active = true` will set it to false

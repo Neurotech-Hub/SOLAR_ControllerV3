@@ -6,7 +6,7 @@
 #include <Wire.h>
 
 // Version tracking
-const String CODE_VERSION = "3.25";
+const String CODE_VERSION = "3.26";
 
 // Pin assignments for ItsyBitsy M4
 const int dacPin = A0;          // DAC output (12-bit, 0-4095)
@@ -71,7 +71,7 @@ float safe_current_mA = 0;      // 99% of target (safety margin)
 int current_dac_value = 0;      // Current DAC value during closeloop
 float measured_current_mA = 0;  // Last measured current
 bool closeloop_active = false;  // Controls when closeloop runs (set by trigger interrupt)
-int last_dac_state = 0;         // Tracks DAC state for edge detection (0 or 1)
+int last_current_state = 0;     // Tracks current state for userLedPin edge detection (0 or 1)
 
 // Frame control variables
 int frameCount = 1;         // Number of frames to execute (default 1)
@@ -229,7 +229,7 @@ void setup()
     current_dac_value = 0;
     measured_current_mA = 0;
     closeloop_active = false;
-    last_dac_state = 0;
+    last_current_state = 0;
     
     // Initialize frame variables
     frameCount = 1;
@@ -388,7 +388,7 @@ void loop()
                     // Immediately drive TRIGGER_OUT LOW to start the pulse
                     digitalWrite(triggerOutPin, LOW);
                     
-                    // If master has a group assignment for this group, enable closeloop
+                    // Master activates closeloop immediately after driving trigger LOW
                     if (current_group == group_id && group_id > 0) {
                         // Use initial_dac for first frame (last_adjusted_dac==0), last_adjusted_dac for subsequent frames
                         current_dac_value = (last_adjusted_dac > 0) ? last_adjusted_dac : (int)initial_dac;
@@ -559,14 +559,15 @@ void triggerInterrupt()
     // Read current trigger state
     bool triggerState = digitalRead(triggerInPin);
     
-    // Immediately propagate to next device (except for master's own signal)
-    if (!isMasterDevice || triggerState != lastTriggerState) {
+    // Only slave devices propagate trigger signals
+    // Master device NEVER propagates in interrupt handler (per SHIFT.md)
+    if (!isMasterDevice) {
         digitalWrite(triggerOutPin, triggerState);
     }
     
     if (triggerState == LOW && lastTriggerState == HIGH) {
         // HIGH->LOW transition: Enable closeloop control
-        if (current_group == group_id && group_id > 0) {
+        if (!isMasterDevice && current_group == group_id && group_id > 0) {
             // Use initial_dac for first frame (last_adjusted_dac==0), last_adjusted_dac for subsequent frames
             current_dac_value = (last_adjusted_dac > 0) ? last_adjusted_dac : (int)initial_dac;
             closeloop_active = true;                // Activate closeloop
@@ -600,10 +601,10 @@ void handleCurrentControl() {
             analogWrite(dacPin, 0);
             current_dac_value = 0;
             
-            // Update userLedPin if DAC state changed
-            if (last_dac_state != 0) {
+            // Update userLedPin if current state changed
+            if (last_current_state != 0) {
                 digitalWrite(userLedPin, LOW);
-                last_dac_state = 0;
+                last_current_state = 0;
             }
         }
         return;
@@ -616,7 +617,7 @@ void handleCurrentControl() {
         analogWrite(dacPin, 0);
         current_dac_value = 0;
         digitalWrite(userLedPin, LOW);
-        last_dac_state = 0;
+        last_current_state = 0;
         return;
     }
     
@@ -626,7 +627,7 @@ void handleCurrentControl() {
         analogWrite(dacPin, 0);
         current_dac_value = 0;
         digitalWrite(userLedPin, LOW);
-        last_dac_state = 0;
+        last_current_state = 0;
         return;
     }
     
@@ -679,11 +680,11 @@ void handleCurrentControl() {
         // CRITICAL: This is the ONLY place where DAC is set during closeloop operation
         analogWrite(dacPin, current_dac_value);
         
-        // Update userLedPin only on DAC state changes (0 ↔ non-zero)
-        int new_dac_state = (current_dac_value > 0) ? 1 : 0;
-        if (new_dac_state != last_dac_state) {
-            digitalWrite(userLedPin, new_dac_state ? HIGH : LOW);
-            last_dac_state = new_dac_state;
+        // Update userLedPin based on active current (measured_current_mA)
+        int new_current_state = (measured_current_mA > 1.0) ? 1 : 0;
+        if (new_current_state != last_current_state) {
+            digitalWrite(userLedPin, new_current_state ? HIGH : LOW);
+            last_current_state = new_current_state;
         }
     }
 }
@@ -767,7 +768,7 @@ void handleProgramExecution()
                 // Drive TRIGGER_OUT LOW to start the next pulse
                 digitalWrite(triggerOutPin, LOW);
                 
-                // If master has a group assignment for current group, enable closeloop
+                // Master activates closeloop immediately after driving trigger LOW
                 if (current_group == group_id && group_id > 0) {
                     // Use initial_dac for first frame (last_adjusted_dac==0), last_adjusted_dac for subsequent frames
                     current_dac_value = (last_adjusted_dac > 0) ? last_adjusted_dac : (int)initial_dac;
