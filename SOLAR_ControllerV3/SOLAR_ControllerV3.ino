@@ -6,7 +6,7 @@
 #include <Wire.h>
 
 // Version tracking
-const String CODE_VERSION = "3.3.4";
+const String CODE_VERSION = "3.3.5";
 
 // Pin assignments for ItsyBitsy M4
 const int dacPin = A0;          // DAC output (12-bit, 0-4095)
@@ -74,6 +74,7 @@ float safe_current_mA = 0;      // 99% of target (safety margin)
 int current_dac_value = 0;      // Current DAC value during closeloop
 float measured_current_mA = 0;  // Last measured current
 bool closeloop_active = false;  // Controls when closeloop runs (set by trigger interrupt)
+bool dac_output_active = false; // true iff DAC output > 0 has been applied
 int last_current_state = 0;     // Tracks current state for userLedPin edge detection (0 or 1)
 int overcurrent_consecutive_count = 0;  // Tracks consecutive overcurrent readings (0-2)
 
@@ -95,7 +96,6 @@ struct DeviceStatus {
     float current;      // Target current in mA
     int exposure;       // Exposure duration in ms
     bool isSet;         // true if program command received
-    bool isCalibrated;  // true after Frame_0 completes for this device
 };
 const int MAX_DEVICES = 50; // Maximum supported devices
 DeviceStatus deviceCache[MAX_DEVICES]; // Dynamic device cache based on totalDevices
@@ -236,6 +236,7 @@ void setup()
     current_dac_value = 0;
     measured_current_mA = 0;
     closeloop_active = false;
+    dac_output_active = false;
     last_current_state = 0;
     overcurrent_consecutive_count = 0;
     
@@ -257,7 +258,6 @@ void setup()
         deviceCache[i].current = 0;
         deviceCache[i].exposure = 0;
         deviceCache[i].isSet = false;
-        deviceCache[i].isCalibrated = false;
     }
 
     // Initialize Serial interfaces
@@ -360,14 +360,26 @@ void loop()
                     return;
                 }
                 
-                // Initialize Frame_0 calibration phase
+                // CRITICAL: Reset ALL control values for clean start
                 program_success = false;
                 frameExecutionActive = true;
                 inCalibrationPhase = true;  // Start with Frame_0
                 calibrationComplete = false;  // Reset calibration status
                 currentFrameLoop = 0;  // Frame_0 tracking
                 inPulsePhase = true;
+
+                // Reset ALL DAC and current control variables
                 last_adjusted_dac = 0;  // Reset for fresh calibration
+                current_dac_value = 0;  // Reset to zero before calibration starts
+                measured_current_mA = 0;  // Reset measured current
+                closeloop_active = false;  // Ensure closeloop starts inactive
+                dac_output_active = false;  // Ensure DAC output tracking is reset
+                overcurrent_consecutive_count = 0;  // Reset overcurrent counter
+                last_current_state = 0;  // Reset LED state tracking
+
+                // Ensure DAC is physically OFF before starting
+                analogWrite(dacPin, 0);
+                digitalWrite(userLedPin, LOW);
                 
                 // Reset current_group to 1 at start
                 current_group = 1;
@@ -508,7 +520,6 @@ void loop()
                         deviceCache[cmd.deviceId - 1].current = cache_current;
                         deviceCache[cmd.deviceId - 1].exposure = cache_exposure;
                         deviceCache[cmd.deviceId - 1].isSet = true;
-                        deviceCache[cmd.deviceId - 1].isCalibrated = false;  // Will be set true after Frame_0
                         Serial.println("DEBUG: Cached program for device " + String(cmd.deviceId));
                     } else if (cmd.deviceId == 0) {
                         // Broadcast command - cache for all devices in chain
@@ -517,7 +528,6 @@ void loop()
                             deviceCache[i].current = cache_current;
                             deviceCache[i].exposure = cache_exposure;
                             deviceCache[i].isSet = true;
-                            deviceCache[i].isCalibrated = false;  // Will be set true after Frame_0
                         }
                         Serial.println("DEBUG: Cached program for all " + String(totalDevices) + " devices");
                     }
@@ -560,13 +570,13 @@ void triggerInterrupt()
     
     // Only slave devices propagate trigger signals
     // Master device NEVER propagates in interrupt handler (per SHIFT.md)
-    if (!isMasterDevice) {
+    if (!isMasterDevice || triggerState != lastTriggerState) {
         digitalWrite(triggerOutPin, triggerState);
     }
     
     if (triggerState == LOW && lastTriggerState == HIGH) {
         // HIGH->LOW transition: Enable closeloop control
-        if (!isMasterDevice && current_group == group_id && group_id > 0) {
+        if (current_group == group_id && group_id > 0) {
             // Initialize DAC based on whether we have calibrated value
             if (last_adjusted_dac > 0) {
                 // Have calibrated value - use it (Frame_1+)
@@ -576,6 +586,7 @@ void triggerInterrupt()
                 current_dac_value = dacCalibrationStart;
             }
             closeloop_active = true;  // Activate closeloop
+            Serial.println("DEBUG: Trigger State: LOW");
         }
     } else if (triggerState == HIGH && lastTriggerState == LOW) {
         // LOW->HIGH transition: Record DAC value (calibration or adjustment)
@@ -586,6 +597,7 @@ void triggerInterrupt()
                 calibrationComplete = true;  // Mark calibration complete
             }
         }
+        Serial.println("DEBUG: Trigger State: High");
         closeloop_active = false;  // Deactivate closeloop
         
         // Only slave devices rotate to next group based on trigger signal
@@ -604,12 +616,13 @@ void triggerInterrupt()
 void handleCurrentControl() {
     // CRITICAL: Only run closeloop when closeloop_active is true
     if (!closeloop_active) {
-        // Closeloop is disabled - ensure DAC is off
-        if (current_dac_value > 0) {
+        // Closeloop is disabled - ensure DAC output is off once
+        if (dac_output_active) {
+            Serial.println("DEBUG: Last_adj=" + String(current_dac_value));
             last_adjusted_dac = current_dac_value;
             analogWrite(dacPin, 0);
-            current_dac_value = 0;        
-            digitalWrite(userLedPin, LOW);            
+            dac_output_active = false;
+            digitalWrite(userLedPin, LOW);
             last_current_state = 0;
         }
         overcurrent_consecutive_count = 0;  // Reset counter when closeloop inactive
@@ -628,6 +641,7 @@ void handleCurrentControl() {
     }
     
     if (target_current_mA <= 0) {
+        Serial.println("DEBUG: target_current_mA is 0! Shutting down DAC");
         // No target current - cannot regulate
         closeloop_active = false;
         analogWrite(dacPin, 0);
@@ -637,11 +651,12 @@ void handleCurrentControl() {
         return;
     }
     
+    Serial.println("DEBUG: Current DAC value: " + String(current_dac_value));
     // Wait for conversion ready with 1ms timeout to get fresh current reading
     if (ina226.waitConversionReady(1)) {
         // Read current feedback from INA226
         measured_current_mA = ina226.getCurrent_mA();
-        // Serial.print("DEBUG: I: "); Serial.print(measured_current_mA); Serial.print("(mA) | DAC: "); Serial.println(current_dac_value);
+        Serial.print("DEBUG: I: "); Serial.print(measured_current_mA); Serial.print("(mA) | DAC: "); Serial.println(current_dac_value);
         
         // CRITICAL: Emergency shutdown check - current > maxCurrent * 1.01 for TWO CONSECUTIVE readings
         if (measured_current_mA > (maxCurrent_mA * 1.01)) {
@@ -706,10 +721,11 @@ void handleCurrentControl() {
         // If between safe_current_mA and target_current_mA, hold steady
         
         // Constrain and apply new DAC value
-        current_dac_value = constrain(current_dac_value, dacMin, dacMax);
+        current_dac_value = constrain(current_dac_value, dacCalibrationStart, dacMax);
         
         // CRITICAL: This is the ONLY place where DAC is set during closeloop operation
         analogWrite(dacPin, current_dac_value);
+        dac_output_active = (current_dac_value > 0);
         
         // Update userLedPin based on active current (measured_current_mA)
         int new_current_state = (measured_current_mA > 1.0) ? 1 : 0;
@@ -736,11 +752,6 @@ void handleProgramExecution()
                 if (group_id == current_group && group_id > 0 && current_dac_value > 0) {
                     last_adjusted_dac = current_dac_value;  // Store calibrated DAC
                     calibrationComplete = true;
-                    
-                    // Cache calibration status (master only)
-                    if (isMasterDevice && myDeviceId >= 1 && myDeviceId <= MAX_DEVICES) {
-                        deviceCache[myDeviceId - 1].isCalibrated = true;
-                    }
                     
                     // Log calibration result with measured current
                     Serial.println("FRAME_0: G_ID=" + String(current_group) + 
@@ -954,7 +965,6 @@ void processCommand(String data)
                         deviceCache[cmd.deviceId - 1].current = new_current;
                         deviceCache[cmd.deviceId - 1].exposure = new_exposure;
                         deviceCache[cmd.deviceId - 1].isSet = true;
-                        deviceCache[cmd.deviceId - 1].isCalibrated = false;  // Will be set true after Frame_0
                     } else if (cmd.deviceId == 0) {
                         // Broadcast command - cache for all devices in chain
                         for (int i = 0; i < totalDevices && i < MAX_DEVICES; i++) {
@@ -962,7 +972,6 @@ void processCommand(String data)
                             deviceCache[i].current = new_current;
                             deviceCache[i].exposure = new_exposure;
                             deviceCache[i].isSet = true;
-                            deviceCache[i].isCalibrated = false;  // Will be set true after Frame_0
                         }
                     }
                 }
@@ -1234,10 +1243,8 @@ void printStatus()
         Serial.println("PROGRAMS_CACHE:");
         for (int i = 0; i < totalDevices && i < MAX_DEVICES; i++) {
             if (deviceCache[i].isSet) {
-                String calStatus = deviceCache[i].isCalibrated ? "CALIBRATED" : "NOT_SET";
                 Serial.println("DEV:" + String(i + 1) + 
                               ", G_ID:" + String(deviceCache[i].group_id) + 
-                              ", CAL_DAC:" + calStatus + 
                               ", I:" + String(deviceCache[i].current) + "mA" +
                               ", EXP:" + String(deviceCache[i].exposure) + "ms");
             } else {
@@ -1295,9 +1302,8 @@ void sendCommandAndWait(String command)
 
 void emergencyShutdown()
 {
-    if (Serial) {
-        Serial.println("EMERGENCY SHUTDOWN ACTIVATED!");
-    }
+
+    Serial.println("EMERGENCY SHUTDOWN ACTIVATED!");
     
     // Turn off DAC immediately
     analogWrite(dacPin, 0);

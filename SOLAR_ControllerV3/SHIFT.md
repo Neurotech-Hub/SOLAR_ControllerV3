@@ -77,7 +77,7 @@ All devices will need to track the following pieces of information (new variable
 1. int group_id = 0;
 2. int group_total = 0;
 3. float target_current_mA = 0; // Target current for closeloop regulation
-4. int duration = 0; // exposure duration in milliseconds
+4. int exposure = 0; // exposure duration in milliseconds
 5. int current_group = 1; // tracks which group is currently active (1-based)
 6. int last_adjusted_dac = 0; // Last DAC value (calibrated in Frame_0, adjusted in Frame_1+)
 7. bool program_success = false; // master only: tracks if program execution was successful
@@ -165,9 +165,8 @@ Each device must have an INA226 current sensor connected via I2C (address 0x4A) 
 
 ### Overcurrent Protection
 - **Emergency Shutdown:** Shutdown if current > maxCurrent × 1.01 (1515mA) for **two consecutive INA226 readings**
-  - **First over-threshold reading:** Log warning, prevent DAC increases (safety hold)
   - **Second consecutive over-threshold:** Immediate emergency shutdown
-  - **Non-consecutive spikes:** Do NOT trigger shutdown (e.g., spike at t=110ms, normal at t=111ms, spike at t=125ms)
+  - **Non-consecutive spikes:** Do NOT trigger shutdown
   - **Counter reset:** Automatically resets when current drops below threshold or closeloop deactivates
   - **Applies to:** Both Frame_0 (calibration) and Frame_1+ (normal operation)
   - Slave devices self-shutdown independently
@@ -365,11 +364,6 @@ struct DeviceStatus {
 };
 ```
 
-**Status Command Output:**
-- Before calibration: `DEV:1, G_ID:1, CAL_DAC:NOT_SET, I:1300mA, EXP:20ms`
-- After calibration: `DEV:2, G_ID:2, CAL_DAC:CALIBRATED, I:1350mA, EXP:20ms`
-- Note: Only master device's CAL_DAC is shown (slaves cannot report back easily)
-
 ### Error Handling
 
 **INA226 Failure During Calibration:**
@@ -480,9 +474,6 @@ The `status` command provides a comprehensive overview of the system's current c
 -   **Frame programming settings:**
     -   `FRAME_COUNT: {frameCount}`
     -   `INTERFRAME_DELAY: {interframeDelay}`
--   **Per-device status:** For each device in the chain, a line will be printed in the format:
-    - Before calibration: `DEV:{device_id}, G_ID:{group_id}, CAL_DAC:NOT_SET, I:{current}mA, EXP:{exposure}ms`
-    - After calibration: `DEV:{device_id}, G_ID:{group_id}, CAL_DAC:CALIBRATED, I:{current}mA, EXP:{exposure}ms`
 
 To implement this, the master will need to cache the `group_id`, `calibratation_status`, `current`, and `exposure` for each `device_id`.
 
@@ -570,12 +561,6 @@ To implement this, the master will need to cache the `group_id`, `calibratation_
 - [ ] Test closeloop_active flag behavior with trigger signals
 
 **Phase 8: Auto-Calibration System (Frame_0 Implementation)**
-- [ ] Add calibration constants:
-  - [ ] `const int dacCalibrationStart = 1300;`
-  - [ ] `const int calibrationDuration = 1000;`
-- [ ] Add new global variables:
-  - [ ] `bool inCalibrationPhase = false;` - Tracks if in Frame_0
-  - [ ] `bool calibrationComplete = false;` - Per-device calibration status
 - [ ] Update DeviceStatus structure (master only):
   - [ ] Rename `dac` field to `calibrated_dac`
   - [ ] Add `bool isCalibrated` field
@@ -624,8 +609,6 @@ To implement this, the master will need to cache the `group_id`, `calibratation_
   - [ ] Update function signature and all call sites
 - [ ] Update `printStatus()`:
   - [ ] Change output format for device cache
-  - [ ] Before calibration: "CAL_DAC:NOT_SET"
-  - [ ] After calibration: "CAL_DAC:{value}" (master only)
   - [ ] Keep current/exposure display
 - [ ] Update `printHelp()`:
   - [ ] Update program command format from 5 to 4 parameters
