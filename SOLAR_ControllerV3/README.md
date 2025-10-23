@@ -2,11 +2,11 @@
 
 ## Overview
 
-This firmware is designed for the Adafruit ItsyBitsy M4, creating a high-speed, synchronized LED and servo controller system. It is ideal for applications requiring precise, coordinated control across multiple independent modules, such as in neuroscience or machine vision lighting.
+This firmware is designed for the Adafruit ItsyBitsy M4, creating a high-speed, synchronized LED and servo controller system. It is ideal for applications requiring precise, coordinated control across multiple independent modules.
 
 The architecture moves away from traditional daisy-chained serial commands for timing control and instead implements a hardware-based **trigger chain**. A single master device sends programming commands down a serial line, but a dedicated trigger line is used to initiate actions. This allows for highly synchronized, low-latency execution of complex, multi-group lighting sequences.
 
-**NEW in v3.3:** The system now features **automatic DAC calibration** (Frame_0), eliminating the need to manually determine optimal DAC values for each device. Simply specify your target current, and the system automatically finds the right DAC value during a 1-second calibration phase before executing programmed frames.
+**NEW in v3.3:** The system now features **automatic DAC calibration** (Frame_0), eliminating the need to manually determine optimal DAC values for each device. Simply specify your target current, and the system automatically finds the right DAC value during calibration phase before executing programmed frames.
 
 ## Key Features
 
