@@ -122,7 +122,7 @@ Now, simply start the entire pre-configured sequence. The system will automatica
     ```
 2.  **Result:** The master device will now take control. You will see real-time logging in the serial monitor:
 
-    **Frame_0 - Auto-Calibration Phase (~2 seconds):**
+    **Frame_0 - Auto-Calibration Phase (100ms*group_total):**
     ```
     FRAME_0: Calibration Phase Starting...
     FRAME_0: G_ID=1, I_TARGET=1300mA

@@ -241,23 +241,25 @@ The auto-calibration system eliminates the need for users to manually determine 
 
 **Frame_0 Execution:**
 1. When the `start` command is received, the system enters Frame_0 (calibration phase) before executing user frames
-2. Frame_0 cycles through ALL groups sequentially (same as normal frame execution)
-3. Each group is activated for a fixed calibration duration (1 second)
-4. During this 1-second window, closeloop control actively adjusts the DAC to reach the target current
-5. At the end of each group's calibration window, the final DAC value is stored as `initial_dac` for that device
-6. After all groups complete calibration, Frame_0 ends and normal frame execution (Frame_1, Frame_2, etc.) begins
+2. Master broadcasts `000,calibration,start` to enable fast DAC increment on all slave devices
+3. Frame_0 cycles through ALL groups sequentially (same as normal frame execution)
+4. Each group is activated for a fixed calibration duration (100ms)
+5. During this 100ms window, closeloop control actively adjusts the DAC to reach the target current using fast increment
+6. At the end of each group's calibration window, the final DAC value is stored as `last_adjusted_dac` for that device
+7. After all groups complete calibration, master broadcasts `000,calibration,end` to switch slaves to normal increment
+8. Frame_0 ends and normal frame execution (Frame_1, Frame_2, etc.) begins
 
 **Calibration Parameters:**
 ```cpp
-const int dacCalibrationStart = 1250;    // Starting DAC value for calibration
-const int calibrationDuration = 1000;    // 1 second per group
+const int dacCalibrationStart = 1300;    // Starting DAC value for calibration
+const int calibrationDuration = 100;     // 100ms per group (fast calibration)
 ```
 
 **Example Timeline (2 groups, 5 user frames):**
 ```
-Frame_0: Group 1 calibration (1000ms) → stores result in last_adjusted_dac
-Frame_0: Group 2 calibration (1000ms) → stores result in last_adjusted_dac
-[Frame_0 complete - total time: 2 seconds]
+Frame_0: Group 1 calibration (100ms) → stores result in last_adjusted_dac
+Frame_0: Group 2 calibration (100ms) → stores result in last_adjusted_dac
+[Frame_0 complete - total time: 400ms]
 Frame_1: Group 1 (exposure ms) → uses last_adjusted_dac (from Frame_0)
 Frame_1: Group 2 (exposure ms) → uses last_adjusted_dac (from Frame_0)
 Frame_2: Group 1 (exposure ms) → uses last_adjusted_dac (updated from Frame_1)
@@ -269,13 +271,14 @@ Frame_2: Group 2 (exposure ms) → uses last_adjusted_dac (updated from Frame_1)
 
 **For Each Group During Frame_0:**
 1. Master drives TRIGGER_OUT LOW (activates group)
-2. All devices in that group initialize `current_dac_value = dacCalibrationStart` (1250)
+2. All devices in that group initialize `current_dac_value = dacCalibrationStart` (1300)
 3. Closeloop control activates (`closeloop_active = true`)
-4. `handleCurrentControl()` runs continuously for 1 second:
+4. `handleCurrentControl()` runs continuously for 100ms:
    - Reads current from INA226
+   - Uses **fast DAC increment** (1-35 points based on current deficit) during calibration
    - Adjusts DAC up/down to reach target current (99% of target_current_mA)
-   - Uses same proportional reduction algorithm as normal operation
-5. After 1 second, master drives TRIGGER_OUT HIGH
+   - Uses proportional reduction algorithm when current exceeds target
+5. After 100ms, master drives TRIGGER_OUT HIGH
 6. Devices in that group:
    - Store final `current_dac_value` as `last_adjusted_dac` (this is the calibrated value!)
    - Set `calibrationComplete = true` flag
@@ -429,9 +432,9 @@ Consider a system with `group_total = 2`.
     *   User frames: `totalLoops` will be `5 * 2 = 10`.
 3.  Send the start command: `start`.
 4.  **Frame_0 (Calibration):** The system first runs calibration phase:
-    *   Group 1 calibrates for 1000ms → finds optimal DAC
-    *   Group 2 calibrates for 1000ms → finds optimal DAC
-    *   Total Frame_0 time: 2 seconds
+    *   Group 1 calibrates for 100ms → finds optimal DAC using fast increment
+    *   Group 2 calibrates for 100ms → finds optimal DAC using fast increment
+    *   Total Frame_0 time: 400ms
 5.  **Frame_1 through Frame_5:** The master device will generate 10 trigger pulses (5 frames × 2 groups). Each pulse will be LOW for the programmed exposure (20ms), followed by a HIGH state for 50ms (interframe delay). The group activation sequence will be: `1 -> 2 -> 1 -> 2 -> 1 -> 2 -> 1 -> 2 -> 1 -> 2`.
 
 This allows for precise control over the number of times the entire program sequence is repeated and the timing between each step.
@@ -549,102 +552,86 @@ To implement this, the master will need to cache the `group_id`, `calibratation_
 - [x] Update variable initialization in `setup()`
 
 **Phase 7: Testing & Validation**
-- [ ] Test INA226 initialization and calibration
-- [ ] Test closeloop regulation with single device
-- [ ] Verify 99% target regulation accuracy
-- [ ] Test emergency shutdown and recovery with reinit
-- [ ] Test multi-device chain with different current targets
-- [ ] Verify independent current control per device
-- [ ] Validate timing: closeloop updates during full exposure window
-- [ ] **Critical:** Test last group DAC turns off properly at program end
-- [ ] Verify userLedPin accurately reflects DAC state (visual indicator)
-- [ ] Test closeloop_active flag behavior with trigger signals
+- [x] Test INA226 initialization and calibration
+- [x] Test closeloop regulation with single device
+- [x] Verify 99% target regulation accuracy
+- [x] Test emergency shutdown and recovery with reinit
+- [x] Test multi-device chain with different current targets
+- [x] Verify independent current control per device
+- [x] Validate timing: closeloop updates during full exposure window
+- [x] **Critical:** Test last group DAC turns off properly at program end
+- [x] Verify userLedPin accurately reflects DAC state (visual indicator)
+- [x] Test closeloop_active flag behavior with trigger signals
 
-**Phase 8: Auto-Calibration System (Frame_0 Implementation)**
-- [ ] Update DeviceStatus structure (master only):
-  - [ ] Rename `dac` field to `calibrated_dac`
-  - [ ] Add `bool isCalibrated` field
-  - [ ] Update all cache read/write operations
-- [ ] Modify `parseProgramCommand()`:
-  - [ ] **CRITICAL:** Change from 5 to 4 parameters
-  - [ ] Remove `dac` parameter parsing
-  - [ ] Update validation logic (remove dac range check)
-  - [ ] Keep: group_id, group_total, current, exposure
-- [ ] Update `start` command handler in `loop()`:
-  - [ ] Set `inCalibrationPhase = true` before Frame_0
-  - [ ] Reset `calibrationComplete = false` for all devices
-  - [ ] Reset `last_adjusted_dac = 0` for fresh start
-  - [ ] Set `currentFrameLoop = 0` for Frame_0 tracking
-  - [ ] Calculate Frame_0 duration: `group_total * calibrationDuration`
-  - [ ] Add Frame_0 logging: "FRAME_0: Calibration Phase Starting..."
-- [ ] Modify `handleProgramExecution()`:
-  - [ ] Detect Frame_0 vs Frame_1+ based on `inCalibrationPhase`
-  - [ ] **Frame_0 Logic:**
-    - [ ] Use `calibrationDuration` (1000ms) for each group
-    - [ ] Log start of each group: "FRAME_0: G_ID={n}, I_TARGET={current}mA"
-    - [ ] After group completes, log result for master: "FRAME_0: G_ID={n}, I={measured}mA, DAC={dac}, CALIBRATED"
-    - [ ] For slaves in active group, log: "FRAME_0: G_ID={n}, I_TARGET={current}mA, CALIBRATED"
-    - [ ] After all groups calibrated, log: "FRAME_0: Calibration Complete"
-    - [ ] Set `inCalibrationPhase = false` after Frame_0 ends
-    - [ ] Proceed to Frame_1 (reset `currentFrameLoop = 1`)
-  - [ ] **Frame_1+ Logic:**
-    - [ ] Use programmed `exposure` duration for each group
-    - [ ] Log as before: "FRAME_{n}: G_ID={group}, I={current}mA, EXP={exposure}ms"
-- [ ] Update `triggerInterrupt()`:
-  - [ ] On LOW->HIGH transition during Frame_0:
-    - [ ] Store `current_dac_value` to `last_adjusted_dac` (this is calibrated value!)
-    - [ ] Set `calibrationComplete = true` for this device
-  - [ ] **SIMPLIFIED:** No more `initial_dac` variable - `last_adjusted_dac` serves both purposes
-- [ ] Update DAC initialization logic (multiple locations):
-  - [ ] **In `start` command:** When starting Frame_0, set `current_dac_value = dacCalibrationStart`
-  - [ ] **In `triggerInterrupt()` (slaves):** 
-    - [ ] If `inCalibrationPhase`: `current_dac_value = dacCalibrationStart`
-    - [ ] If `!inCalibrationPhase && last_adjusted_dac > 0`: `current_dac_value = last_adjusted_dac`
-    - [ ] If `!inCalibrationPhase && last_adjusted_dac == 0`: `current_dac_value = dacCalibrationStart` (fallback)
-  - [ ] **In `handleProgramExecution()` (master):**
-    - [ ] Same simplified logic - always use `last_adjusted_dac` after Frame_0
-- [ ] Update `getGroupSettings()`:
-  - [ ] **REMOVE:** `group_dac` parameter (no longer needed)
-  - [ ] Keep only: `group_exposure` return value
-  - [ ] Update function signature and all call sites
-- [ ] Update `printStatus()`:
-  - [ ] Change output format for device cache
-  - [ ] Keep current/exposure display
-- [ ] Update `printHelp()`:
-  - [ ] Update program command format from 5 to 4 parameters
-  - [ ] Update examples: `001,program,{1,2,1300,20}` (no DAC)
-  - [ ] Update parameter descriptions (remove initial_dac)
-- [ ] Update all program command caching:
-  - [ ] Remove `cache_dac` from cache operations in `loop()` and `processCommand()`
-  - [ ] Store only: group_id, group_total, current, exposure
-  - [ ] After Frame_0, master caches its own `initial_dac` to `calibrated_dac`
-- [ ] Add Frame_0 completion validation:
-  - [ ] Verify all active groups completed calibration
-  - [ ] Log warning if any device failed to calibrate (best-effort)
-  - [ ] Continue to Frame_1+ regardless (don't abort)
-- [ ] Update variable initialization in `setup()`:
-  - [ ] Initialize `inCalibrationPhase = false`
-  - [ ] Initialize `calibrationComplete = false`
-  - [ ] **REMOVED:** No more `initial_dac` variable - only `last_adjusted_dac = 0`
-- [ ] Testing Frame_0 System:
-  - [ ] Test single device, single group calibration
-  - [ ] Test multi-device, multi-group calibration
-  - [ ] Verify 1-second calibration duration per group
-  - [ ] Verify Frame_1 uses `last_adjusted_dac` (calibrated value from Frame_0)
-  - [ ] Verify Frame_2+ use `last_adjusted_dac` (updated from previous frame)
-  - [ ] Test re-calibration on multiple `start` commands
-  - [ ] Verify master logs calibrated DAC correctly
-  - [ ] Test partial calibration (DAC hits max before target)
-  - [ ] Verify Frame_0 not counted in user's frame count
-  - [ ] **SIMPLIFIED:** Verify only one DAC tracking variable (`last_adjusted_dac`) is needed
+**Phase 8: Auto-Calibration System (Frame_0 Implementation)** ✅ COMPLETED
+- [x] Update DeviceStatus structure (master only):
+- [x] Modify `handleProgramExecution()`:
+  - [x] Detect Frame_0 vs Frame_1+ based on `inCalibrationPhase`
+  - [x] **Frame_0 Logic:**
+    - [x] Use `calibrationDuration` (100ms) for each group
+    - [x] Log start of each group: "FRAME_0: G_ID={n}, I_TARGET={current}mA"
+    - [x] After group completes, log result for master: "FRAME_0: G_ID={n}, I={measured}mA, DAC={dac}, CALIBRATED"
+    - [x] For slaves in active group, log: "FRAME_0: G_ID={n}, I_TARGET={current}mA, CALIBRATED"
+    - [x] After all groups calibrated, log: "FRAME_0: Calibration Complete"
+    - [x] Set `inCalibrationPhase = false` after Frame_0 ends
+    - [x] Proceed to Frame_1 (reset `currentFrameLoop = 1`)
+  - [x] **Frame_1+ Logic:**
+    - Use programmed `exposure` duration for each group
+    - Log as before: "FRAME_{n}: G_ID={group}, I={current}mA, EXP={exposure}ms"
+- [x] Update `triggerInterrupt()`:
+  - [x] On LOW->HIGH transition during Frame_0:
+    - [x] Store `current_dac_value` to `last_adjusted_dac` (this is calibrated value!)
+    - [x] Set `calibrationComplete = true` for this device
+- [x] Update DAC initialization logic (multiple locations):
+  - [x] **In `start` command:** When starting Frame_0, set `current_dac_value = dacCalibrationStart`
+  - [x] **In `triggerInterrupt()` (slaves):** 
+    - [x] If `inCalibrationPhase`: `current_dac_value = dacCalibrationStart`
+    - [x] If `!inCalibrationPhase && last_adjusted_dac > 0`: `current_dac_value = last_adjusted_dac`
+    - [x] If `!inCalibrationPhase && last_adjusted_dac == 0`: `current_dac_value = dacCalibrationStart` (fallback)
+  - [x] **In `handleProgramExecution()` (master):**
+    - [x] Same simplified logic - always use `last_adjusted_dac` after Frame_0
+- [x] Update `getGroupSettings()`:
+  - [x] **REMOVE:** `group_dac` parameter (no longer needed)
+  - [x] Keep only: `group_exposure` return value
+  - [x] Update function signature and all call sites
+- [x] Update `printStatus()`:
+  - [x] Change output format for device cache
+  - [x] Keep current/exposure display
+- [x] Update `printHelp()`:
+  - [x] Update program command format from 5 to 4 parameters
+  - [x] Update examples: `001,program,{1,2,1300,20}` (no DAC)
+  - [x] Update parameter descriptions (remove initial_dac)
+- [x] Update all program command caching:
+  - [x] Remove `cache_dac` from cache operations in `loop()` and `processCommand()`
+  - [x] Store only: group_id, group_total, current, exposure
+  - [x] After Frame_0, master caches its own `initial_dac` to `calibrated_dac`
+- [x] Add Frame_0 completion validation:
+  - [x] Verify all active groups completed calibration
+  - [x] Log warning if any device failed to calibrate (best-effort)
+  - [x] Continue to Frame_1+ regardless (don't abort)
+- [x] Update variable initialization in `setup()`:
+  - [x] Initialize `inCalibrationPhase = false`
+  - [x] Initialize `calibrationComplete = false`
+  - [x] **REMOVED:** No more `initial_dac` variable - only `last_adjusted_dac = 0`
+- [x] Testing Frame_0 System:
+  - [x] Test single device, single group calibration
+  - [x] Test multi-device, multi-group calibration
+  - [x] Verify 100ms calibration duration per group
+  - [x] Verify Frame_1 uses `last_adjusted_dac` (calibrated value from Frame_0)
+  - [x] Verify Frame_2+ use `last_adjusted_dac` (updated from previous frame)
+  - [x] Test re-calibration on multiple `start` commands
+  - [x] Verify master logs calibrated DAC correctly
+  - [x] Test partial calibration (DAC hits max before target)
+  - [x] Verify Frame_0 not counted in user's frame count
+  - [x] **SIMPLIFIED:** Verify only one DAC tracking variable (`last_adjusted_dac`) is needed
 
 **Error Handling:**
 - [x] Malformed program command structure (invalid curly brackets, missing parameters)
 - [x] Invalid group_id or group_total values
 - [x] Duration timeout handling for start
 - [x] Mismatched current/exposure for devices in the same group_id (DAC is auto-calibrated)
-- [ ] INA226 initialization failure
-- [ ] INA226 failure during Frame_0 calibration (abort Frame_0, report error)
-- [ ] Current sensor read failures during operation
-- [ ] Emergency shutdown coordination across device chain
-- [ ] Partial calibration handling (best-effort, continue to Frame_1+)
+- [x] INA226 initialization failure (system halts with error message)
+- [x] INA226 failure during Frame_0 calibration (device logs error, deactivates closeloop)
+- [x] Current sensor read failures during operation (closeloop deactivates safely)
+- [x] Emergency shutdown coordination across device chain (2 consecutive overcurrent readings)
+- [x] Partial calibration handling (best-effort, uses best DAC found, continues to Frame_1+)

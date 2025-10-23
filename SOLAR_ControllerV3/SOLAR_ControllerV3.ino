@@ -6,7 +6,7 @@
 #include <Wire.h>
 
 // Version tracking
-const String CODE_VERSION = "3.3.5";
+const String CODE_VERSION = "3.3.8";
 
 // Pin assignments for ItsyBitsy M4
 const int dacPin = A0;          // DAC output (12-bit, 0-4095)
@@ -23,7 +23,7 @@ const int dacMax = 2000;         // Maximum DAC value
 
 // Auto-Calibration Parameters (Phase 8)
 const int dacCalibrationStart = 1300;   // Starting DAC value for Frame_0 calibration
-const int calibrationDuration = 1000;   // Calibration duration per group (ms)
+const int calibrationDuration = 100;   // Calibration duration per group (ms)
 
 // INA226 current sensor (I2C address 0x4A)
 INA226 ina226(0x4A);
@@ -132,6 +132,7 @@ bool validateGroupExposures();
 bool initializeINA226();
 bool calculateCalibration();
 int calculateDacReduction(float currentReading, float targetCurrent);
+int calculateDacIncrement(float currentReading, float targetCurrent);
 void handleCurrentControl();
 
 // INA226 Initialization Functions
@@ -192,7 +193,41 @@ int calculateDacReduction(float currentReading, float targetCurrent) {
     } else if (percentageOver >= 2.5) {
         return 2;    // 2.5% or more: reduce by 2 points
     } else {
-        return 0;    // Less than 2%: no reduction needed
+        return 1;    // Less than 2.5%: reduce by 1 point
+    }
+}
+
+int calculateDacIncrement(float currentReading, float targetCurrent) {
+    if (targetCurrent <= 0) return 0;  // Avoid division by zero
+    
+    // Calculate percentage deficit (how far UNDER target we are)
+    float percentageUnder = ((targetCurrent - currentReading) / targetCurrent) * 100.0;
+    
+    // If current is far below target, increase DAC proportionally for fast convergence
+    if (percentageUnder >= 80.0) {
+        return 35;  // 80% or more under: increase by 35 points
+    } else if (percentageUnder >= 60.0) {
+        return 20;   // 60% or more under: increase by 20 points
+    } else if (percentageUnder >= 50.0) {
+        return 15;   // 50% or more under: increase by 15 points
+    } else if (percentageUnder >= 40.0) {
+        return 10;   // 40% or more under: increase by 10 points
+    } else if (percentageUnder >= 35.0) {
+        return 8;   // 35% or more under: increase by 8 points
+    } else if (percentageUnder >= 30.0) {
+        return 7;    // 30% or more under: increase by 7 points
+    } else if (percentageUnder >= 25.0) {
+        return 6;    // 25% or more under: increase by 6 points
+    } else if (percentageUnder >= 20.0) {
+        return 5;    // 20% or more under: increase by 5 points
+    } else if (percentageUnder >= 15.0) {
+        return 4;    // 15% or more under: increase by 4 points
+    } else if (percentageUnder >= 10.0) {
+        return 3;    // 10% or more under: increase by 3 points
+    } else if (percentageUnder >= 4.0) {
+        return 2;    // 4% or more under: increase by 2 points
+    } else {
+        return 1;    // Less than 4% under: increase by 1 point (fine control)
     }
 }
 
@@ -400,13 +435,17 @@ void loop()
                 // Start timing for Frame_0 (calibration duration = 1 second per group)
                 programStartTime = millis();
                 programDuration = calibrationDuration;
-                
+
+                // CRITICAL: Broadcast calibration mode to ALL slave devices
+                Serial1.println("000,calibration,start");
+                Serial.println("DEBUG: Broadcasted calibration mode to all slave devices");
+                delay(10);                
                 // Immediately drive TRIGGER_OUT LOW to start calibration
                 digitalWrite(triggerOutPin, LOW);
                 
                 // Master activates closeloop with calibration starting DAC
                 if (current_group == group_id && group_id > 0) {
-                    current_dac_value = dacCalibrationStart;  // Start from 1250
+                    current_dac_value = dacCalibrationStart;
                     closeloop_active = true;  // Enable closeloop for calibration
                 }
                 
@@ -578,7 +617,7 @@ void triggerInterrupt()
         // HIGH->LOW transition: Enable closeloop control
         if (current_group == group_id && group_id > 0) {
             // Initialize DAC based on whether we have calibrated value
-            if (last_adjusted_dac > 0) {
+            if (last_adjusted_dac > 0 && last_adjusted_dac != dacMax) {
                 // Have calibrated value - use it (Frame_1+)
                 current_dac_value = last_adjusted_dac;
             } else {
@@ -706,17 +745,21 @@ void handleCurrentControl() {
         if (measured_current_mA < safe_current_mA) {
             // Under target - increment DAC (but not if we have overcurrent warning)
             if (overcurrent_consecutive_count == 0) {
-                current_dac_value++;
+                // Use fast increment during calibration (Frame_0), slow increment during normal operation (Frame_1+)
+                if (inCalibrationPhase) {
+                    // Frame_0 calibration: Use smart increment for fast convergence
+                    int increment = calculateDacIncrement(measured_current_mA, target_current_mA);
+                    current_dac_value += increment;
+                } else {
+                    // Frame_1+ normal operation: Increment by 1 for stable fine control
+                    current_dac_value++;
+                }
             }
             // else: hold DAC during overcurrent warning for safety
         } else if (measured_current_mA >= target_current_mA) {
             // Over target - reduce DAC proportionally
             int reduction = calculateDacReduction(measured_current_mA, target_current_mA);
-            if (reduction > 0) {
-                current_dac_value -= reduction;
-            } else {
-                current_dac_value--;
-            }
+            current_dac_value -= reduction;
         }
         // If between safe_current_mA and target_current_mA, hold steady
         
@@ -791,6 +834,11 @@ void handleProgramExecution()
                 if (currentFrameLoop >= group_total) {
                     // Frame_0 complete - transition to Frame_1
                     Serial.println("FRAME_0: Calibration Complete");
+                    
+                    // CRITICAL: Broadcast calibration end to ALL slave devices
+                    Serial1.println("000,calibration,end");
+                    Serial.println("DEBUG: Broadcasted calibration end to all slave devices");
+                    
                     inCalibrationPhase = false;
                     currentFrameLoop = 1;  // Start Frame_1
                     
@@ -857,9 +905,12 @@ void handleProgramExecution()
                     if (inCalibrationPhase) {
                         // Frame_0: Start from calibration DAC
                         current_dac_value = dacCalibrationStart;
-                    } else if (last_adjusted_dac > 0) {
+                    } else if (last_adjusted_dac > 0 && last_adjusted_dac != dacMax) {
                         // Frame_1+: Use last frame's DAC (includes Frame_0 calibration)
                         current_dac_value = last_adjusted_dac;
+                    }
+                    else {
+                        current_dac_value = dacCalibrationStart;
                     }
                     closeloop_active = true;  // Enable closeloop
                 }
@@ -993,6 +1044,24 @@ void processCommand(String data)
                 }
             }
         }
+        // Handle calibration mode command (for slave synchronization)
+        else if (cmd.command == "calibration")
+        {
+            if (cmd.value == "start") {
+                inCalibrationPhase = true;
+                calibrationComplete = false;
+                if (Serial && !isMasterDevice) {
+                    Serial.println("DEBUG: Slave entering calibration mode - using fast DAC increment");
+                }
+            } else if (cmd.value == "end") {
+                inCalibrationPhase = false;
+                if (Serial && !isMasterDevice) {
+                    Serial.println("DEBUG: Slave exiting calibration mode - using normal DAC increment");
+                }
+            }
+            // DO NOT FORWARD calibration commands - they're one-time broadcasts
+            return;  // Exit before forwarding logic to prevent infinite loop
+        }
         // Handle servo command
         else if (cmd.command == "servo")
         {
@@ -1004,25 +1073,11 @@ void processCommand(String data)
                 Serial.println("DEBUG: Servo set to:" + String(angle));
             }
         }
-
-        // Handle DAC command (direct control)
-        else if (cmd.command == "dac")
-        {
-            int value = cmd.value.toInt();
-            value = constrain(value, dacMin, dacMax);
-            targetDacValue = value;
-            currentDacValue = value;
-            analogWrite(dacPin, value);
-            digitalWrite(userLedPin, value > 1200 ? HIGH : LOW);
-            if (Serial)
-            {
-                // Serial.println("DEBUG: Target DAC:" + String(value));
-            }
-        }
     }
 
     // Always forward unless we're master and it's our command returning
-    if (!isMasterDevice || (isMasterDevice && data != pendingCommand))
+    // OR it's a calibration command (already processed, don't loop)
+    if ((!isMasterDevice || (isMasterDevice && data != pendingCommand)) && cmd.command != "calibration")
     {
         if (Serial && !isMasterDevice)
         {
