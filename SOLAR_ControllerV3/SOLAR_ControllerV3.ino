@@ -224,8 +224,8 @@ int calculateDacIncrement(float currentReading, float targetCurrent) {
         return 4;    // 15% or more under: increase by 4 points
     } else if (percentageUnder >= 10.0) {
         return 3;    // 10% or more under: increase by 3 points
-    } else if (percentageUnder >= 4.0) {
-        return 2;    // 4% or more under: increase by 2 points
+    } else if (percentageUnder >= 5.0) {
+        return 2;    // 5% or more under: increase by 2 points
     } else {
         return 1;    // Less than 4% under: increase by 1 point (fine control)
     }
@@ -625,7 +625,7 @@ void triggerInterrupt()
                 current_dac_value = dacCalibrationStart;
             }
             closeloop_active = true;  // Activate closeloop
-            Serial.println("DEBUG: Trigger State: LOW");
+            // Serial.println("DEBUG: Trigger State: LOW");
         }
     } else if (triggerState == HIGH && lastTriggerState == LOW) {
         // LOW->HIGH transition: Record DAC value (calibration or adjustment)
@@ -636,7 +636,7 @@ void triggerInterrupt()
                 calibrationComplete = true;  // Mark calibration complete
             }
         }
-        Serial.println("DEBUG: Trigger State: High");
+        // Serial.println("DEBUG: Trigger State: High");
         closeloop_active = false;  // Deactivate closeloop
         
         // Only slave devices rotate to next group based on trigger signal
@@ -657,7 +657,7 @@ void handleCurrentControl() {
     if (!closeloop_active) {
         // Closeloop is disabled - ensure DAC output is off once
         if (dac_output_active) {
-            Serial.println("DEBUG: Last_adj=" + String(current_dac_value));
+            // Serial.println("DEBUG: Last_adj=" + String(current_dac_value));
             last_adjusted_dac = current_dac_value;
             analogWrite(dacPin, 0);
             dac_output_active = false;
@@ -690,12 +690,12 @@ void handleCurrentControl() {
         return;
     }
     
-    Serial.println("DEBUG: Current DAC value: " + String(current_dac_value));
+    // Serial.println("DEBUG: Current DAC value: " + String(current_dac_value));
     // Wait for conversion ready with 1ms timeout to get fresh current reading
     if (ina226.waitConversionReady(1)) {
         // Read current feedback from INA226
         measured_current_mA = ina226.getCurrent_mA();
-        Serial.print("DEBUG: I: "); Serial.print(measured_current_mA); Serial.print("(mA) | DAC: "); Serial.println(current_dac_value);
+        // Serial.print("DEBUG: I: "); Serial.print(measured_current_mA); Serial.print("(mA) | DAC: "); Serial.println(current_dac_value);
         
         // CRITICAL: Emergency shutdown check - current > maxCurrent * 1.01 for TWO CONSECUTIVE readings
         if (measured_current_mA > (maxCurrent_mA * 1.01)) {
@@ -721,7 +721,7 @@ void handleCurrentControl() {
                 
                 // Master broadcasts emergency shutdown to all devices
                 if (isMasterDevice) {
-                    Serial.println("DEBUG: Broadcasting emergency shutdown");
+                    Serial.println("Broadcasting emergency shutdown");
                     Serial1.println("000,dac,0");
                 }
                 
@@ -853,7 +853,7 @@ void handleProgramExecution()
                 if (currentFrameLoop > totalLoops) {
                     // All frames complete
                     digitalWrite(triggerOutPin, HIGH);
-                    Serial.println("DEBUG: All frames complete, final TRIGGER_OUT HIGH sent");
+                    // Serial.println("DEBUG: All frames complete, final TRIGGER_OUT HIGH sent");
                     
                     program_success = true;
                     frameExecutionActive = false;
