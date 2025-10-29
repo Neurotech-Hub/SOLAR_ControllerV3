@@ -487,8 +487,6 @@ void loop()
                 frameCount = count;
                 interframeDelay = delay;
                 
-                Serial.println("DEBUG: Frame settings updated - Count: " + String(frameCount) + 
-                              ", Interframe delay: " + String(interframeDelay) + "ms");
                 Serial.println("FRAME_SET:" + String(frameCount) + "," + String(interframeDelay));
                 return;
             }
@@ -505,7 +503,7 @@ void loop()
             }
 
             // Validate command type (frame and start are handled above as simple commands)
-            if (cmd.command != "servo" && cmd.command != "dac" && 
+            if (cmd.command != "servo" && 
                 cmd.command != "init" && cmd.command != "program")
             {
                 Serial.println("ERR:INVALID_COMMAND:" + cmd.command);
@@ -532,17 +530,6 @@ void loop()
                 {
                     Serial.println("ERR:SERVO_RANGE:" + String(angle));
                     Serial.println("UI:Servo angle must be 60-120 degrees");
-                    return;
-                }
-            }
-
-            else if (cmd.command == "dac")
-            {
-                int value = cmd.value.toInt();
-                if (value < 0 || value > 4095)
-                {
-                    Serial.println("ERR:DAC_RANGE:" + String(value));
-                    Serial.println("UI:DAC value must be 0-4095");
                     return;
                 }
             }
@@ -695,7 +682,7 @@ void handleCurrentControl() {
     if (ina226.waitConversionReady(1)) {
         // Read current feedback from INA226
         measured_current_mA = ina226.getCurrent_mA();
-        // Serial.print("DEBUG: I: "); Serial.print(measured_current_mA); Serial.print("(mA) | DAC: "); Serial.println(current_dac_value);
+        Serial.print("DEBUG: I: "); Serial.print(measured_current_mA); Serial.print("(mA) | DAC: "); Serial.println(current_dac_value);
         
         // CRITICAL: Emergency shutdown check - current > maxCurrent * 1.01 for TWO CONSECUTIVE readings
         if (measured_current_mA > (maxCurrent_mA * 1.01)) {
@@ -853,7 +840,7 @@ void handleProgramExecution()
                 if (currentFrameLoop > totalLoops) {
                     // All frames complete
                     digitalWrite(triggerOutPin, HIGH);
-                    // Serial.println("DEBUG: All frames complete, final TRIGGER_OUT HIGH sent");
+                    Serial.println("DEBUG: All frames complete, final TRIGGER_OUT HIGH sent");
                     
                     program_success = true;
                     frameExecutionActive = false;
@@ -930,7 +917,7 @@ void processCommand(String data)
     {
         if (isMasterDevice)
         {
-            Serial.println("DEBUG: Failed to parse chain command: " + data);
+            Serial.println("Failed to parse chain command: " + data);
         }
         return;
     }
@@ -950,13 +937,12 @@ void processCommand(String data)
                 // Received final count
                 totalDevices = cmd.value.toInt();
                 currentState = CHAIN_READY;
-                Serial.println("DEBUG: Init complete - found " + String(totalDevices) + " devices");
                 Serial.println("INIT:TOTAL:" + String(totalDevices));
                 Serial.println("UI:Ready for commands");
             }
             else
             {
-                Serial.println("DEBUG: Ignoring init command in state: " + String(currentState));
+                Serial.println("Ignoring init command in state: " + String(currentState));
             }
         }
         else
@@ -1070,7 +1056,7 @@ void processCommand(String data)
             targetServoPos = angle;
             if (Serial)
             {
-                Serial.println("DEBUG: Servo set to:" + String(angle));
+                Serial.println("Servo set to:" + String(angle));
             }
         }
     }
@@ -1220,7 +1206,6 @@ void reinitializeDevices()
     delay(100);
     
     // Start fresh initialization
-    Serial.println("DEBUG: Starting fresh device initialization");
     Serial.println("STATE:Initializing");
     Serial.println("DEBUG: Sending initial command: 000,init,001");
     Serial1.println("000,init,001");
@@ -1232,7 +1217,6 @@ void printHelp()
     Serial.println("UI:Available Commands:");
     Serial.println("UI:  Device Control:");
     Serial.println("UI:    xxx,servo,angle - Set servo angle (60-120)");
-    Serial.println("UI:    xxx,dac,value   - Set DAC value directly (0-2000)");
     Serial.println("UI:  Program Control:");
     Serial.println("UI:    xxx,program,{group_id,group_total,current,exposure}");
     Serial.println("UI:      - group_id: Group number (1-n)");
@@ -1380,7 +1364,7 @@ void emergencyShutdown()
     if (isMasterDevice)
     {
         if (Serial) {
-            Serial.println("DEBUG: Broadcasting emergency shutdown to all devices");
+            Serial.println("***ALERT: Broadcasting emergency shutdown to all devices***");
         }
         Serial1.println("000,dac,0");
     }

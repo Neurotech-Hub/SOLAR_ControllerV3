@@ -59,8 +59,6 @@ These commands follow the format `deviceId,command,value`.
 | `xxx,program,{g_id,g_total,current,exp}` | Programs a device. `xxx` is device ID (or `000` for all). `g_id` is the group ID (1-based). `g_total` is the total number of unique groups. `current` is the target current in mA (0-1500). `exp` is the exposure time in ms (1-100). **Note:** DAC value is auto-calibrated during Frame_0. |
 | `frame,count,delay` | **Master only.** Configures program execution frames. `count` is repetitions of the group sequence. `delay` is the pause in ms between group activations. |
 | `xxx,servo,angle` | Sets the servo position. `angle` is 60-120 degrees. |
-| `xxx,dac,value` | Directly sets the DAC output, bypassing the closeloop. `value` is 0-4095. |
-
 ---
 
 ## Example Usage: 4-Device, 2-Group Setup
