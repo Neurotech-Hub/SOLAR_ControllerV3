@@ -190,10 +190,6 @@ When making changes:
 3. Update relevant documentation
 4. Verify backwards compatibility
 
-## License
-
-Copyright (c) 2025 - Neurotech Hub
-
 ## References
 
 - [SOLAR Controller V2](https://github.com/Neurotech-Hub/SOLAR_ControllerV2) - Previous version
