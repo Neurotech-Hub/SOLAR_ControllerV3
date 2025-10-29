@@ -6,7 +6,7 @@
 #include <Wire.h>
 
 // Version tracking
-const String CODE_VERSION = "3.3.8";
+const String CODE_VERSION = "3.3.9";
 
 // Pin assignments for ItsyBitsy M4
 const int dacPin = A0;          // DAC output (12-bit, 0-4095)
@@ -644,7 +644,7 @@ void handleCurrentControl() {
     if (!closeloop_active) {
         // Closeloop is disabled - ensure DAC output is off once
         if (dac_output_active) {
-            // Serial.println("DEBUG: Last_adj=" + String(current_dac_value));
+            Serial.println("DEBUG: Last adjusted DAC=" + String(current_dac_value));
             last_adjusted_dac = current_dac_value;
             analogWrite(dacPin, 0);
             dac_output_active = false;
