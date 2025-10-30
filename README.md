@@ -2,7 +2,7 @@
 
 A high-speed, synchronized LED and servo controller system for Adafruit ItsyBitsy M4 microcontrollers with constant current-based LED control.
 
-![SOLAR Controller V3 GUI](docs/gui.png)
+![SOLAR Controller V3 GUI](docs/GUI.png)
 
 ## Project Components
 
