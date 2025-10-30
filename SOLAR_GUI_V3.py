@@ -4,6 +4,8 @@ SOLAR Controller V3 GUI
 A Python GUI application for controlling ItsyBitsy M4 boards with LED arrays and servo motors.
 """
 
+__version__ = "3.0.2"
+
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog
 import serial
@@ -18,7 +20,7 @@ class SolarController:
     def __init__(self, root):
         self.root = root
         self.root.title("SOLAR Controller V3 GUI")
-        self.root.geometry("900x800")
+        self.root.geometry("1200x800")
         
         # Serial connection
         self.serial_port = None
@@ -73,27 +75,34 @@ class SolarController:
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
-        # Configure grid weights
+        # Configure grid weights for two-column layout
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(0, weight=1)
+        main_frame.columnconfigure(0, weight=1)  # Left column (controls)
+        main_frame.columnconfigure(1, weight=1)  # Right column (log)
+        main_frame.rowconfigure(0, weight=1)     # Allow vertical expansion
         
-        # Create sections
+        # Left side container for controls
+        left_frame = ttk.Frame(main_frame)
+        left_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 5))
+        left_frame.columnconfigure(0, weight=1)
+        
+        # Create control sections on left side
         row = 0
-        self.create_serial_section(main_frame, row)
+        self.create_serial_section(left_frame, row)
         row += 1
         
-        self.create_system_status_section(main_frame, row)
+        self.create_system_status_section(left_frame, row)
         row += 1
         
-        self.create_servo_section(main_frame, row)
+        self.create_servo_section(left_frame, row)
         row += 1
         
-        self.create_led_control_section(main_frame, row)
+        self.create_led_control_section(left_frame, row)
         row += 1
         
-        self.create_communication_log_section(main_frame, row)
-        main_frame.rowconfigure(row, weight=1)
+        # Right side - Communication Log
+        self.create_communication_log_section(main_frame, 0)  # Spans full height on right
     
     def create_serial_section(self, parent, row):
         """Create Serial Connection section"""
@@ -294,7 +303,7 @@ class SolarController:
     def create_communication_log_section(self, parent, row):
         """Create Communication Log section"""
         frame = ttk.LabelFrame(parent, text="Communication Log", padding="10")
-        frame.grid(row=row, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        frame.grid(row=row, column=1, rowspan=10, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5, padx=(5, 0))
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(1, weight=1)
         
@@ -716,9 +725,19 @@ class SolarController:
 
 
 def main():
-    root = tk.Tk()
-    app = SolarController(root)
-    root.mainloop()
+    try:
+        root = tk.Tk()
+        print("Tkinter root window created successfully")
+        print(f"Tkinter version: {tk.TkVersion}")
+        
+        app = SolarController(root)
+        print("SolarController initialized successfully")
+        
+        root.mainloop()
+    except Exception as e:
+        print(f"ERROR: Failed to start GUI: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
