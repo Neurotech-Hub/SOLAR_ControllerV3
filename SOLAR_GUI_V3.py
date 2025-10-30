@@ -20,7 +20,7 @@ class SolarController:
     def __init__(self, root):
         self.root = root
         self.root.title("SOLAR Controller V3 GUI")
-        self.root.geometry("1200x800")
+        self.root.geometry("1200x900")
         
         # Serial connection
         self.serial_port = None
@@ -34,7 +34,7 @@ class SolarController:
         # GUI variables
         self.port_var = tk.StringVar()
         self.baud_var = tk.StringVar(value="115200")
-        self.auto_connect_var = tk.BooleanVar(value=False)
+        self.auto_connect_var = tk.BooleanVar(value=True)
         
         # System status variables
         self.total_devices = tk.IntVar(value=0)
@@ -47,12 +47,13 @@ class SolarController:
         self.servo_angle_var = tk.IntVar(value=90)
         
         # LED control variables
-        self.led_device_var = tk.StringVar(value="000 - All")
+        self.led_target_mode = tk.StringVar(value="individual")  # default to individual
+        self.led_device_var = tk.StringVar(value="001 - Device 1")
         self.group_total_var = tk.IntVar(value=1)
         self.group_id_var = tk.StringVar(value="1")
         self.current_var = tk.IntVar(value=0)
-        self.exposure_var = tk.IntVar(value=10)
-        self.frame_count_var = tk.IntVar(value=1)
+        self.exposure_var = tk.IntVar(value=20)
+        self.frame_count_var = tk.IntVar(value=10)
         self.interframe_delay_var = tk.IntVar(value=10)
         
         # Communication log variables
@@ -110,33 +111,32 @@ class SolarController:
         frame.grid(row=row, column=0, sticky=(tk.W, tk.E), pady=5)
         frame.columnconfigure(1, weight=1)
         
-        # Port selection
-        ttk.Label(frame, text="Port:").grid(row=0, column=0, sticky=tk.W, padx=5)
+        # Row 1: Port selection and Refresh button
+        ttk.Label(frame, text="Port:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
         self.port_combo = ttk.Combobox(frame, textvariable=self.port_var, width=20)
-        self.port_combo.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5)
+        self.port_combo.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5, pady=2)
         
         ttk.Button(frame, text="Refresh", command=self.refresh_ports).grid(
-            row=0, column=2, padx=5)
+            row=0, column=2, padx=5, pady=2)
         
-        # Baud rate
-        ttk.Label(frame, text="Baud:").grid(row=0, column=3, sticky=tk.W, padx=5)
+        # Row 2: Baud rate and Connect button
+        ttk.Label(frame, text="Baud:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
         baud_combo = ttk.Combobox(frame, textvariable=self.baud_var, 
-                                   values=["9600", "115200"], width=10, state="readonly")
-        baud_combo.grid(row=0, column=4, padx=5)
+                                   values=["9600", "115200"], width=20, state="readonly")
+        baud_combo.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=5, pady=2)
         
-        # Auto-connect checkbox
-        ttk.Checkbutton(frame, text="Auto-connect", 
-                       variable=self.auto_connect_var).grid(row=0, column=5, padx=5)
-        
-        # Connect/Disconnect button
         self.connect_button = ttk.Button(frame, text="Connect", 
                                         command=self.toggle_connection)
-        self.connect_button.grid(row=0, column=6, padx=5)
+        self.connect_button.grid(row=1, column=2, padx=5, pady=2)
         
-        # Connection status indicator
+        # Row 3: Auto-connect checkbox and Connection status
+        ttk.Checkbutton(frame, text="Auto-connect", 
+                       variable=self.auto_connect_var).grid(row=2, column=0, columnspan=2, 
+                                                            sticky=tk.W, padx=5, pady=2)
+        
         self.connection_label = ttk.Label(frame, textvariable=self.connection_status,
                                          foreground="red", font=("Arial", 10, "bold"))
-        self.connection_label.grid(row=0, column=7, padx=5)
+        self.connection_label.grid(row=2, column=2, padx=5, pady=2)
         
         # Initial port refresh
         self.refresh_ports()
@@ -206,8 +206,8 @@ class SolarController:
         
         # Slider
         self.servo_slider = ttk.Scale(control_frame, from_=60, to=120, 
-                                     variable=self.servo_angle_var, orient=tk.HORIZONTAL)
-        self.servo_slider.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5)
+                                     variable=self.servo_angle_var, orient=tk.HORIZONTAL, length=200, command=lambda value: self.servo_angle_var.set(round(float(value))))
+        self.servo_slider.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5, pady=5)
         
         # Spinbox
         servo_spin = ttk.Spinbox(control_frame, from_=60, to=120, 
@@ -234,51 +234,57 @@ class SolarController:
         frame.grid(row=row, column=0, sticky=(tk.W, tk.E), pady=5)
         frame.columnconfigure(1, weight=1)
         
-        # Device selection
-        device_frame = ttk.Frame(frame)
-        device_frame.grid(row=0, column=0, columnspan=4, sticky=(tk.W, tk.E), pady=5)
-        
-        ttk.Label(device_frame, text="Device:").grid(row=0, column=0, padx=5, sticky=tk.W)
-        self.led_device_combo = ttk.Combobox(device_frame, textvariable=self.led_device_var,
-                                            width=15)
-        self.led_device_combo.grid(row=0, column=1, padx=5, sticky=tk.W)
-        self.update_led_device_list()
-        
-        # Group configuration
+        # Group configuration and target mode (Row 1)
         group_frame = ttk.LabelFrame(frame, text="Group Configuration", padding="5")
-        group_frame.grid(row=1, column=0, columnspan=4, sticky=(tk.W, tk.E), pady=5)
+        group_frame.grid(row=0, column=0, columnspan=4, sticky=(tk.W, tk.E), pady=5)
         
         ttk.Label(group_frame, text="Group Total:").grid(row=0, column=0, padx=5, sticky=tk.W)
-        self.group_total_spin = ttk.Spinbox(group_frame, from_=1, to=50, 
-                                           textvariable=self.group_total_var, 
+        self.group_total_spin = ttk.Spinbox(group_frame, from_=1, to=50,
+                                           textvariable=self.group_total_var,
                                            width=10, command=self.update_group_id_list)
         self.group_total_spin.grid(row=0, column=1, padx=5, sticky=tk.W)
         
-        ttk.Label(group_frame, text="Group ID:").grid(row=0, column=2, padx=5, sticky=tk.W)
-        self.group_id_combo = ttk.Combobox(group_frame, textvariable=self.group_id_var,
-                                          width=10)
+        ttk.Radiobutton(group_frame, text="All LEDs", variable=self.led_target_mode,
+                        value="all", command=self.update_led_device_state).grid(
+                            row=0, column=2, padx=10)
+        ttk.Radiobutton(group_frame, text="Individual", variable=self.led_target_mode,
+                        value="individual", command=self.update_led_device_state).grid(
+                            row=0, column=3, padx=5)
+        
+        # Programming parameters section
+        prog_param_frame = ttk.LabelFrame(frame, text="Programming Parameters", padding="5")
+        prog_param_frame.grid(row=1, column=0, columnspan=4, sticky=(tk.W, tk.E), pady=5)
+        
+        # Device and Group ID (Row 1 of programming parameters)
+        ttk.Label(prog_param_frame, text="Device:").grid(row=0, column=0, padx=5, sticky=tk.W)
+        self.led_device_combo = ttk.Combobox(prog_param_frame, textvariable=self.led_device_var, width=15)
+        self.led_device_combo.grid(row=0, column=1, padx=5, sticky=tk.W)
+        
+        ttk.Label(prog_param_frame, text="Group ID:").grid(row=0, column=2, padx=5, sticky=tk.W)
+        self.group_id_combo = ttk.Combobox(prog_param_frame, textvariable=self.group_id_var, width=10)
         self.group_id_combo.grid(row=0, column=3, padx=5, sticky=tk.W)
+        
+        # Current and Exposure (Row 2 of programming parameters)
+        ttk.Label(prog_param_frame, text="Current (mA):").grid(row=1, column=0, padx=5, sticky=tk.W)
+        ttk.Spinbox(prog_param_frame, from_=0, to=1500, 
+                   textvariable=self.current_var, width=10).grid(row=1, column=1, padx=5, sticky=tk.W)
+        
+        ttk.Label(prog_param_frame, text="Exposure (ms):").grid(row=1, column=2, padx=5, sticky=tk.W)
+        ttk.Spinbox(prog_param_frame, from_=1, to=100, 
+                   textvariable=self.exposure_var, width=10).grid(row=1, column=3, padx=5, sticky=tk.W)
+        
+        # Initialize dropdowns and states
+        self.update_led_device_list()
         self.update_group_id_list()
-        
-        # LED parameters
-        led_param_frame = ttk.LabelFrame(frame, text="LED Parameters", padding="5")
-        led_param_frame.grid(row=2, column=0, columnspan=4, sticky=(tk.W, tk.E), pady=5)
-        
-        ttk.Label(led_param_frame, text="Current (mA):").grid(row=0, column=0, padx=5, sticky=tk.W)
-        ttk.Spinbox(led_param_frame, from_=0, to=1500, 
-                   textvariable=self.current_var, width=10).grid(row=0, column=1, padx=5, sticky=tk.W)
-        
-        ttk.Label(led_param_frame, text="Exposure (ms):").grid(row=0, column=2, padx=5, sticky=tk.W)
-        ttk.Spinbox(led_param_frame, from_=1, to=100, 
-                   textvariable=self.exposure_var, width=10).grid(row=0, column=3, padx=5, sticky=tk.W)
+        self.update_led_device_state()
         
         # Program button
         ttk.Button(frame, text="Program", command=self.send_program_command).grid(
-            row=3, column=0, columnspan=4, pady=5)
+            row=2, column=0, columnspan=4, pady=5)
         
         # Frame configuration
         frame_config_frame = ttk.LabelFrame(frame, text="Frame Configuration", padding="5")
-        frame_config_frame.grid(row=4, column=0, columnspan=4, sticky=(tk.W, tk.E), pady=5)
+        frame_config_frame.grid(row=3, column=0, columnspan=4, sticky=(tk.W, tk.E), pady=5)
         
         ttk.Label(frame_config_frame, text="Frame Count:").grid(row=0, column=0, padx=5, sticky=tk.W)
         ttk.Spinbox(frame_config_frame, from_=1, to=1000, 
@@ -290,11 +296,11 @@ class SolarController:
         
         # Frame button
         ttk.Button(frame, text="Set Frame", command=self.send_frame_command).grid(
-            row=5, column=0, columnspan=4, pady=5)
+            row=4, column=0, columnspan=4, pady=5)
         
         # Execute button (prominent)
-        execute_button = ttk.Button(frame, text="EXECUTE", command=self.send_start_command)
-        execute_button.grid(row=6, column=0, columnspan=4, pady=10)
+        execute_button = ttk.Button(frame, text="Execute", command=self.send_start_command)
+        execute_button.grid(row=5, column=0, columnspan=4, pady=10)
         # Make execute button more prominent
         style = ttk.Style()
         style.configure('Execute.TButton', font=('Arial', 12, 'bold'))
@@ -311,7 +317,7 @@ class SolarController:
         control_frame = ttk.Frame(frame)
         control_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=5)
         
-        ttk.Checkbutton(control_frame, text="Hide DEBUG messages", 
+        ttk.Checkbutton(control_frame, text="Filter DEBUG messages", 
                        variable=self.debug_filter_var,
                        command=self.refresh_log_display).grid(row=0, column=0, padx=5)
         
@@ -521,8 +527,7 @@ class SolarController:
     
     def send_reinit_command(self):
         """Send reinit command"""
-        if messagebox.askyesno("Confirm", "Re-initialize all devices?"):
-            self.send_command("reinit")
+        self.send_command("reinit")
     
     def send_emergency_command(self):
         """Send emergency shutdown command"""
@@ -574,6 +579,11 @@ class SolarController:
             messagebox.showerror("Invalid Group", f"Group ID must be between 1 and {group_total}")
             return
         
+        # Determine device id based on target mode
+        if self.led_target_mode.get() == "all":
+            device_id = "000"
+        else:
+            device_id = device_id
         # Format command with curly brackets
         command = f"{device_id},program,{{{group_id},{group_total},{current},{exposure}}}"
         self.send_command(command)
@@ -597,11 +607,10 @@ class SolarController:
     
     def send_start_command(self):
         """Send start command"""
-        if messagebox.askyesno("Execute", "Start program execution with Frame_0 auto-calibration?"):
+        if messagebox.askyesno("Execute", "Start program?"):
             self.send_command("start")
     
     # UI Update Methods
-    
     def update_servo_device_state(self):
         """Update servo device combo state based on target mode"""
         if self.servo_target_mode.get() == "all":
@@ -631,7 +640,12 @@ class SolarController:
             devices.append(f"{i:03d} - Device {i}")
         
         self.led_device_combo['values'] = devices
-        if not self.led_device_var.get() or self.led_device_var.get() not in devices:
+        if self.led_target_mode.get() == "individual":
+            if total >= 1:
+                self.led_device_var.set("001 - Device 1")
+            else:
+                self.led_device_var.set("000 - All")
+        else:
             self.led_device_var.set("000 - All")
     
     def update_group_id_list(self):
@@ -648,6 +662,19 @@ class SolarController:
                 self.group_id_var.set("1")
         except ValueError:
             self.group_id_var.set("1")
+
+    def update_led_device_state(self):
+        """Enable/disable LED device combo based on target mode"""
+        if self.led_target_mode.get() == "all":
+            self.led_device_combo.config(state="disabled")
+            self.led_device_var.set("000 - All")
+        else:
+            self.led_device_combo.config(state="readonly")
+            # Ensure a sensible default when switching to individual
+            if self.total_devices.get() >= 1:
+                self.led_device_var.set("001 - Device 1")
+            else:
+                self.led_device_var.set("000 - All")
     
     # Log Methods
     

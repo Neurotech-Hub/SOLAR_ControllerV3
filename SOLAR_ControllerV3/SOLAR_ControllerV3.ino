@@ -682,7 +682,7 @@ void handleCurrentControl() {
     if (ina226.waitConversionReady(1)) {
         // Read current feedback from INA226
         measured_current_mA = ina226.getCurrent_mA();
-        Serial.print("DEBUG: I: "); Serial.print(measured_current_mA); Serial.print("(mA) | DAC: "); Serial.println(current_dac_value);
+        // Serial.print("DEBUG: I: "); Serial.print(measured_current_mA); Serial.print("(mA) | DAC: "); Serial.println(current_dac_value);
         
         // CRITICAL: Emergency shutdown check - current > maxCurrent * 1.01 for TWO CONSECUTIVE readings
         if (measured_current_mA > (maxCurrent_mA * 1.01)) {

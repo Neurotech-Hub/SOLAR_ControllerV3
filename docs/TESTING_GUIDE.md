@@ -57,8 +57,6 @@ python SOLAR_GUI_V3.py
 
 **Test 2.3: Re-initialize Button**
 - [ ] Click "Re-initialize" button
-- [ ] Verify confirmation dialog appears
-- [ ] Click "Yes"
 - [ ] Verify `reinit` command sent
 - [ ] Verify device chain re-initializes (check log for INIT messages)
 - [ ] Verify Total Devices updates after re-initialization

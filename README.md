@@ -1,6 +1,8 @@
 # SOLAR Controller V3
 
-A high-speed, synchronized LED and servo controller system for Adafruit ItsyBitsy M4 microcontrollers with automatic DAC calibration and current-based LED control.
+A high-speed, synchronized LED and servo controller system for Adafruit ItsyBitsy M4 microcontrollers with constant current-based LED control.
+
+![SOLAR Controller V3 GUI](docs/gui.png)
 
 ## Project Components
 
@@ -24,7 +26,7 @@ Python-based graphical user interface for controlling the SOLAR system:
 - Real-time communication logging
 
 **Location**: `SOLAR_GUI_V3.py`  
-**Documentation**: See `SOLAR_GUI_V3_README.md`
+**Documentation**: See `docs/SOLAR_GUI_V3_README.md`
 
 ### 3. DAC Calculator (Utility)
 Standalone Arduino utility for finding optimal DAC values and testing current control.
@@ -112,8 +114,8 @@ Result: Groups activate sequentially with precise timing and accurate current co
 
 ## Version Information
 
-- **Firmware**: v3.3.8
-- **GUI**: v1.0.0
+- **Firmware**: v3.3.9
+- **GUI**: v3.0.2
 - **Protocol**: Round-robin with hardware trigger chain
 
 ## Hardware Requirements
