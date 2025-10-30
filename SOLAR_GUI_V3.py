@@ -20,7 +20,7 @@ class SolarController:
     def __init__(self, root):
         self.root = root
         self.root.title("SOLAR Controller V3 GUI")
-        self.root.geometry("1200x900")
+        self.root.geometry("1200x835")
         
         # Serial connection
         self.serial_port = None
