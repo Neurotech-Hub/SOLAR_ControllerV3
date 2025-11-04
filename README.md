@@ -36,12 +36,6 @@ Standalone Arduino utility for finding optimal DAC values and testing current co
 
 ## Quick Start
 
-### Hardware Setup
-1. Flash SOLAR_ControllerV3 firmware to ItsyBitsy M4 boards
-2. Connect boards in daisy-chain configuration
-3. Connect INA226 current sensors to each board
-4. Connect LED arrays and servo motors
-
 ### Software Setup
 1. Install Python 3.7+ and dependencies:
    ```bash
@@ -118,14 +112,6 @@ Result: Groups activate sequentially with precise timing and accurate current co
 - **GUI**: v3.0.2
 - **Protocol**: Round-robin with hardware trigger chain
 
-## Hardware Requirements
-
-- **Microcontroller**: Adafruit ItsyBitsy M4 (SAMD51)
-- **Current Sensor**: INA226 (I2C, 0x4A)
-- **Shunt Resistor**: 41.95 mΩ
-- **Power Supply**: 5V for LED arrays
-- **Communication**: USB (master), Serial1 (chain)
-
 ## Safety Features
 
 - Overcurrent protection (>1515mA for 2 consecutive readings)
@@ -197,12 +183,4 @@ When making changes:
 - [SOLAR Controller V2](https://github.com/Neurotech-Hub/SOLAR_ControllerV2) - Previous version
 - INA226 Datasheet - Current sensor specifications
 - ItsyBitsy M4 - Microcontroller documentation
-
-## Support
-
-For technical support:
-1. Check firmware serial output for debug messages
-2. Export GUI log for detailed communication history
-3. Verify hardware connections and power supply
-4. Review troubleshooting sections in documentation
 
