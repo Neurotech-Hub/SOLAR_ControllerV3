@@ -6,7 +6,7 @@
 #include <Wire.h>
 
 // Version tracking
-const String CODE_VERSION = "3.4.1";
+const String CODE_VERSION = "3.5.1";
 
 // Pin assignments for ItsyBitsy M4
 const int dacPin = A0;          // DAC output (12-bit, 0-4095)
@@ -32,6 +32,10 @@ INA226 ina226(0x4A);
 const float shuntResistance = 0.04195;  // 42mΩ shunt
 const float maxCurrent_mA = 1550.0;     // 1.5A max current
 bool ina226_available = false;          // INA226 initialization flag
+
+// Variable Configuration Parameters
+const int conversion_miss_count_limit = 3;   // Maximum consecutive conversion-not-ready events before emergency shutdown
+const int overcurrent_consecutive_count_limit = 3;   // Maximum consecutive overcurrent readings before emergency shutdown
 
 // Command structure
 struct Command
@@ -77,6 +81,7 @@ bool closeloop_active = false;  // Controls when closeloop runs (set by trigger 
 bool dac_output_active = false; // true iff DAC output > 0 has been applied
 int last_current_state = 0;     // Tracks current state for userLedPin edge detection (0 or 1)
 int overcurrent_consecutive_count = 0;  // Tracks consecutive overcurrent readings (0-2)
+int conversion_miss_count = 0;          // Tracks consecutive INA226 conversion-not-ready events
 
 // Frame control variables
 int frameCount = 1;         // Number of frames to execute (default 1)
@@ -85,10 +90,10 @@ int currentFrameLoop = 0;   // Current loop number in frame execution
 int totalLoops = 0;         // Total loops needed for all frames
 bool frameExecutionActive = false; // Flag to track if frame execution is running
 bool inPulsePhase = true;   // true = pulse active, false = interframe delay active
+bool emergencyShutdownActive = false; // Sticky flag: prevents trigger re-activation after emergency
 
 // Auto-Calibration variables (Phase 8)
 bool inCalibrationPhase = false;   // true during Frame_0, false during Frame_1+
-bool calibrationComplete = false;  // Per-device: true after device calibrates (stores in last_adjusted_dac)
 
 // Healthcheck variables (master only)
 bool healthcheck_complete = false;      // true when healthcheck response received from chain
@@ -149,7 +154,7 @@ bool initializeINA226() {
     }
     
     // Set conversion times: 204µs (0x01)
-    ina226.setAverage(0x01);  // 1 sample averaging
+    ina226.setAverage(0x01);  // 4 sample averaging
     ina226.setBusVoltageConversionTime(0x01);  // 204µs
     ina226.setShuntVoltageConversionTime(0x01); // 204µs
     ina226.setMode(0x07);  // Continuous shunt and bus voltage
@@ -332,9 +337,9 @@ void setup()
     frameExecutionActive = false;
     inPulsePhase = true;
     
-    // Initialize calibration variables
+    // Initialize calibration and emergency variables
     inCalibrationPhase = false;
-    calibrationComplete = false;
+    emergencyShutdownActive = false;
     
     // Initialize device cache (master only)
     for (int i = 0; i < MAX_DEVICES; i++) {
@@ -491,15 +496,15 @@ void loop()
                 
                 // CRITICAL: Reset ALL control values for clean start
                 program_success = false;
+                emergencyShutdownActive = false;  // Clear emergency lockout for fresh start
                 frameExecutionActive = true;
                 inCalibrationPhase = true;  // Start with Frame_0
-                calibrationComplete = false;  // Reset calibration status
                 currentFrameLoop = 0;  // Frame_0 tracking
                 inPulsePhase = true;
 
                 // Reset ALL DAC and current control variables
                 last_adjusted_dac = 0;  // Reset for fresh calibration
-                current_dac_value = 0;  // Reset to zero before calibration starts
+                current_dac_value = dacCalibrationStart;  // Reset to calibration start value (1300)
                 measured_current_mA = 0;  // Reset measured current
                 closeloop_active = false;  // Ensure closeloop starts inactive
                 dac_output_active = false;  // Ensure DAC output tracking is reset
@@ -532,7 +537,6 @@ void loop()
 
                 // CRITICAL: Broadcast calibration mode to ALL slave devices
                 Serial1.println("000,calibration,start");
-                Serial.println("DEBUG: Broadcasted calibration mode to all slave devices");
                 delay(10);                
                 // Immediately drive TRIGGER_OUT LOW to start calibration
                 digitalWrite(triggerOutPin, LOW);
@@ -563,10 +567,10 @@ void loop()
                 int count = frameParams.substring(0, firstComma).toInt();
                 int delay = frameParams.substring(firstComma + 1).toInt();
                 
-                if (count < 1 || count > 1000)
+                if (count < 1 || count > 5000)
                 {
                     Serial.println("ERR:FRAME_COUNT_RANGE:" + String(count));
-                    Serial.println("UI:Frame count must be 1-1000");
+                    Serial.println("UI:Frame count must be 1-5000");
                     return;
                 }
                 
@@ -695,8 +699,8 @@ void triggerInterrupt()
     }
     
     if (triggerState == LOW && lastTriggerState == HIGH) {
-        // HIGH->LOW transition: Enable closeloop control
-        if (current_group == group_id && group_id > 0) {
+        // HIGH->LOW transition: Enable closeloop control (blocked during emergency)
+        if (!emergencyShutdownActive && current_group == group_id && group_id > 0) {
             // Initialize DAC based on whether we have calibrated value
             if (last_adjusted_dac > 0 && last_adjusted_dac != dacMax) {
                 // Have calibrated value - use it (Frame_1+)
@@ -713,9 +717,6 @@ void triggerInterrupt()
         if (current_dac_value > 0 && closeloop_active) {
             // Store DAC for next frame (works for both Frame_0 and Frame_1+)
             last_adjusted_dac = current_dac_value;
-            if (inCalibrationPhase) {
-                calibrationComplete = true;  // Mark calibration complete
-            }
         }
         // Serial.println("DEBUG: Trigger State: High");
         closeloop_active = false;  // Deactivate closeloop
@@ -746,6 +747,7 @@ void handleCurrentControl() {
             last_current_state = 0;
         }
         overcurrent_consecutive_count = 0;  // Reset counter when closeloop inactive
+        conversion_miss_count = 0;          // Reset conversion miss counter
         return;
     }
     
@@ -774,6 +776,7 @@ void handleCurrentControl() {
     // Serial.println("DEBUG: Current DAC value: " + String(current_dac_value));
     // Wait for conversion ready with 2ms timeout to get fresh current reading
     if (ina226.waitConversionReady(2)) {
+        conversion_miss_count = 0;  // Reset on successful conversion
         // Read current feedback from INA226
         measured_current_mA = ina226.getCurrent_mA();
         
@@ -794,7 +797,7 @@ void handleCurrentControl() {
             return;
         }
         
-        Serial.print("DEBUG: I: "); Serial.print(measured_current_mA); Serial.print("(mA) | DAC: "); Serial.println(current_dac_value);
+        // Serial.print("DEBUG: I: "); Serial.print(measured_current_mA); Serial.print("(mA) | DAC: "); Serial.println(current_dac_value);
         
         // CRITICAL: Emergency shutdown check - current > maxCurrent for TWO CONSECUTIVE readings
         if (measured_current_mA > (maxCurrent_mA)) {
@@ -806,26 +809,20 @@ void handleCurrentControl() {
                               String(measured_current_mA) + "mA on device " + String(myDeviceId));
                 Serial.println("WARNING: Threshold: " + String(maxCurrent_mA) + 
                               "mA - Monitoring for consecutive reading");
-            } else if (overcurrent_consecutive_count >= 3) {
-                // Second consecutive over-threshold - EMERGENCY SHUTDOWN
-                digitalWrite(userLedPin, LOW);
-                analogWrite(dacPin, 0);
-                current_dac_value = 0;
-                closeloop_active = false;
-                
+            } else if (overcurrent_consecutive_count >= overcurrent_consecutive_count_limit) {
+                // Consecutive over-threshold confirmed - FULL EMERGENCY SHUTDOWN
                 Serial.println("EMERGENCY: Current exceeded " + String(maxCurrent_mA) + 
                               " mA on device " + String(myDeviceId));
-                Serial.println("EMERGENCY: Measured " + String(measured_current_mA) + 
-                              " mA (2 consecutive readings) - SHUTDOWN");
                 
-                // Master broadcasts emergency shutdown to all devices
-                if (isMasterDevice) {
-                    Serial.println("Broadcasting emergency shutdown");
-                    Serial1.println("000,dac,0");
+                emergencyShutdown();
+                
+                // Slave: Report overcurrent to master through chain
+                if (!isMasterDevice) {
+                    Serial1.println("000,overcurrent," + String(myDeviceId));
+                    if (Serial) {
+                        Serial.println("DEBUG: Sent overcurrent report for device " + String(myDeviceId));
+                    }
                 }
-                
-                // Reset counter and return
-                overcurrent_consecutive_count = 0;
                 return;
             }
             
@@ -875,12 +872,33 @@ void handleCurrentControl() {
             digitalWrite(userLedPin, new_current_state ? HIGH : LOW);
             last_current_state = new_current_state;
         }
+    } else {
+        // Conversion NOT ready - DAC is active with NO current feedback!
+        conversion_miss_count++;
+        
+        if (conversion_miss_count >= conversion_miss_count_limit) {
+            // 3+ consecutive failures (~6ms blind at 2ms timeout) = INA226 unresponsive
+            Serial.println("EMERGENCY: INA226 conversion not ready for " + 
+                          String(conversion_miss_count) + " consecutive attempts on device " + String(myDeviceId));
+            Serial.println("EMERGENCY: DAC running blind at value " + String(current_dac_value) + " - forcing shutdown");
+            ina226_available = false;
+            
+            emergencyShutdown();
+            
+            // Report failure through chain so master aborts all frames
+            if (!isMasterDevice) {
+                Serial1.println("000,ina_fail," + String(myDeviceId));
+                if (Serial) {
+                    Serial.println("DEBUG: Sent ina_fail report for device " + String(myDeviceId));
+                }
+            }
+        }
     }
 }
 
 void handleProgramExecution()
 {
-    if (!frameExecutionActive) return;
+    if (!frameExecutionActive || emergencyShutdownActive) return;
     
     // Check if current phase duration has elapsed
     if (millis() - programStartTime >= programDuration) {
@@ -893,7 +911,6 @@ void handleProgramExecution()
                 // Master: Store calibrated DAC value and log results
                 if (group_id == current_group && group_id > 0 && current_dac_value > 0) {
                     last_adjusted_dac = current_dac_value;  // Store calibrated DAC
-                    calibrationComplete = true;
                     
                     // Log calibration result with measured current
                     Serial.println("FRAME_0: G_ID=" + String(current_group) + 
@@ -1137,6 +1154,42 @@ void processCommand(String data)
         return;  // Custom forwarding - don't use generic forwarding
     }
 
+    // Handle overcurrent command (mid-operation overcurrent report from slave)
+    if (cmd.command == "overcurrent")
+    {
+        int failedDeviceId = cmd.value.toInt();
+        if (isMasterDevice) {
+            // Master: A slave reported overcurrent - abort everything
+            Serial.println("EMERGENCY: Device " + String(failedDeviceId) + " reported overcurrent");
+            emergencyShutdown();  // Broadcasts 000,dac,0 to all devices
+        } else {
+            // Slave: Another device had overcurrent - emergency shutdown and forward
+            if (Serial) {
+                Serial.println("EMERGENCY: Device " + String(failedDeviceId) + " reported overcurrent - shutting down");
+            }
+            emergencyShutdown();
+            // Forward overcurrent to next device in chain (towards master)
+            Serial1.println("000,overcurrent," + String(failedDeviceId));
+        }
+        return;  // Custom forwarding - don't use generic forwarding
+    }
+
+    // Handle dac,0 command (emergency shutdown broadcast from master)
+    if (cmd.command == "dac" && cmd.value.toInt() == 0)
+    {
+        if (!emergencyShutdownActive) {
+            if (Serial) {
+                Serial.println("EMERGENCY: Received dac,0 broadcast - shutting down");
+            }
+            emergencyShutdown();
+        }
+        // Slaves forward to next device; master consumes (it originated the message)
+        if (!isMasterDevice) {
+            Serial1.println(data);
+        }
+        return;  // Custom forwarding - don't use generic forwarding
+    }
+
     // Process command if:
     // 1. It's a broadcast (000)
     // 2. OR it matches our device ID exactly
@@ -1164,7 +1217,6 @@ void processCommand(String data)
                 duration = new_exposure;
                 current_group = 1; // Reset to group 1 when new program is set
                 current_dac_value = 0;  // Will be set during Frame_0
-                calibrationComplete = false;  // Reset calibration flag
                 
                 // Cache device settings (master only caches for all devices)
                 if (isMasterDevice) {
@@ -1217,7 +1269,11 @@ void processCommand(String data)
                     return;
                 }
                 inCalibrationPhase = true;
-                calibrationComplete = false;
+                emergencyShutdownActive = false;  // Clear emergency lockout - master is starting fresh
+                last_adjusted_dac = 0;  // Reset for fresh calibration
+                current_dac_value = dacCalibrationStart;  // Reset DAC to start value (1300)
+                dac_output_active = false;  // Reset DAC output tracking
+                overcurrent_consecutive_count = 0;  // Reset overcurrent counter
                 if (Serial && !isMasterDevice) {
                     Serial.println("DEBUG: INA226 checkpoint passed, slave entering calibration mode");
                 }
@@ -1523,6 +1579,11 @@ void sendCommandAndWait(String command)
 
 void emergencyShutdown()
 {
+    // Capture whether we were already in emergency (for broadcast guard)
+    bool alreadyActive = emergencyShutdownActive;
+    
+    // Set sticky flag FIRST - prevents interrupt from re-activating closeloop
+    emergencyShutdownActive = true;
 
     Serial.println("EMERGENCY SHUTDOWN ACTIVATED!");
     
@@ -1530,25 +1591,24 @@ void emergencyShutdown()
     analogWrite(dacPin, 0);
     digitalWrite(userLedPin, LOW);
     
-    // Reset control variables
-
+    // Reset runtime control variables (preserve program configuration for restart via 'start')
     last_adjusted_dac = 0;
     current_dac_value = 0;
     closeloop_active = false;
     dac_output_active = false;
     last_current_state = 0;
-    
-    // Reset program variables
-    target_current_mA = 0;
-    programDuration = 0;
     overcurrent_consecutive_count = 0;
+    conversion_miss_count = 0;
+    
+    // Stop frame execution
+    programDuration = 0;
     frameExecutionActive = false;
     
     // Ensure trigger line is HIGH (inactive)
     digitalWrite(triggerOutPin, HIGH);
     
-    // Send emergency shutdown command to all devices
-    if (isMasterDevice)
+    // Broadcast shutdown to all devices (only once - guard prevents infinite loops)
+    if (isMasterDevice && !alreadyActive)
     {
         if (Serial) {
             Serial.println("***ALERT: Broadcasting emergency shutdown to all devices***");
@@ -1557,9 +1617,8 @@ void emergencyShutdown()
     }
     
     if (Serial) {
-        Serial.println("System shutdown complete. Check hardware and restart.");
+        Serial.println("System shutdown complete. Use 'start' to re-calibrate and resume.");
     }
-
 }
 
 // Function to get exposure for a specific group from device cache (DAC is auto-calibrated)

@@ -635,3 +635,206 @@ To implement this, the master will need to cache the `group_id`, `calibratation_
 - [x] Current sensor read failures during operation (closeloop deactivates safely)
 - [x] Emergency shutdown coordination across device chain (2 consecutive overcurrent readings)
 - [x] Partial calibration handling (best-effort, uses best DAC found, continues to Frame_1+)
+
+**Phase 9: INA226 Healthcheck System (Pre-Start Verification)** ✅ COMPLETED
+
+The healthcheck system ensures all devices in the chain have a functioning INA226 current sensor before any program execution begins. This prevents blind DAC operation and protects LEDs from unregulated current.
+
+### Healthcheck Flow
+
+**Variables (master only):**
+```cpp
+bool healthcheck_complete = false;      // true when healthcheck response received from chain
+int healthcheck_failed_device = 0;      // Device ID that failed healthcheck (0 = all passed)
+```
+
+**Pre-Start Verification Sequence (in `start` command handler):**
+1. **Master self-check:** Calls `verifyINA226()` to confirm its own sensor is responding
+   - If failed → Abort with `ERR:INA226_UNAVAILABLE`, do not proceed
+2. **Chain healthcheck (multi-device only):** Master broadcasts `000,healthcheck,0` to chain
+3. **Slave verification:** Each slave calls `verifyINA226()` on its own INA226:
+   - If upstream device already failed → Forward failure ID without checking own sensor
+   - If own INA226 passes → Forward `000,healthcheck,0` (pass)
+   - If own INA226 fails → Forward `000,healthcheck,{myDeviceId}` (fail with device ID)
+4. **Master receives result:** Final healthcheck response returns through chain
+   - `healthcheck_failed_device == 0` → All passed, proceed to Frame_0
+   - `healthcheck_failed_device > 0` → Abort with device ID of failed sensor
+5. **Timeout protection:** Master waits up to 2 seconds for healthcheck response
+   - If no response → Abort with `ERR:HEALTHCHECK_TIMEOUT`
+
+**`verifyINA226()` Function (defense-in-depth):**
+```
+Step 1: If ina226_available == false → attempt re-initialization
+Step 2: Live probe with waitConversionReady(5ms) → read current → verify non-NaN
+Step 3: If probe fails → re-init + re-probe
+Step 4: Return final status (true = ready, false = failed)
+```
+
+**Calibration Start INA226 Checkpoint (slave devices):**
+When a slave receives `000,calibration,start`, it performs an additional INA226 verification before entering calibration mode. If this checkpoint fails:
+- Slave reports `000,ina_fail,{deviceId}` through chain so master can abort
+- Slave does NOT enter calibration mode
+
+### Healthcheck Error Messages
+```
+ERR:INA226_UNAVAILABLE          - Master's own INA226 not responding
+ERR:HEALTHCHECK_TIMEOUT         - No response from chain within 2 seconds
+ERR:INA226_UNAVAILABLE          - Specific slave device failed (with device ID in UI message)
+HEALTHCHECK:PASS                - All devices passed
+HEALTHCHECK:FAIL:DEV{n}         - Device n failed healthcheck
+```
+
+### Implementation Checklist
+- [x] Add healthcheck variables: `healthcheck_complete`, `healthcheck_failed_device`
+- [x] Add master self-check with `verifyINA226()` before chain healthcheck
+- [x] Implement `verifyINA226()` with re-initialization fallback
+- [x] Implement `probeINA226()` for live I2C verification
+- [x] Add healthcheck command broadcast (`000,healthcheck,0`)
+- [x] Implement slave healthcheck handler: verify own INA226, forward result
+- [x] Implement master healthcheck receiver: capture result, set `healthcheck_complete`
+- [x] Add 2-second timeout for healthcheck response
+- [x] Add upstream failure pass-through (slaves forward first failure, skip own check)
+- [x] Add calibration-start INA226 checkpoint on slave devices
+- [x] Abort start if any device fails healthcheck
+
+**Phase 10: Emergency Shutdown System** ✅ COMPLETED
+
+The emergency shutdown system provides multi-layered safety protection against overcurrent, INA226 failures, and uncontrolled DAC operation. It uses a sticky flag (`emergencyShutdownActive`) to prevent trigger re-activation after shutdown until a fresh `start` command is issued.
+
+### Emergency Shutdown Triggers
+
+**1. Overcurrent Protection (in `handleCurrentControl()`):**
+- Threshold: `maxCurrent_mA` (1550mA)
+- Configurable consecutive count limit: `overcurrent_consecutive_count_limit` (default: 3)
+- First over-threshold reading → WARNING logged, DAC increases blocked (hold/decrease only)
+- Consecutive readings reaching limit → Full emergency shutdown
+- Counter resets when current drops below threshold or closeloop deactivates
+- Slave devices report overcurrent to master: `000,overcurrent,{deviceId}`
+
+**2. INA226 Garbage Reading Detection (in `handleCurrentControl()`):**
+- Detects NaN or extremely negative readings (< -10mA)
+- Indicates I2C communication failure with sensor
+- Immediately marks `ina226_available = false`
+- Triggers emergency shutdown
+- Slave reports to master: `000,ina_fail,{deviceId}`
+
+**3. INA226 Conversion Timeout (in `handleCurrentControl()`):**
+- Configurable miss limit: `conversion_miss_count_limit` (default: 3)
+- `waitConversionReady(1)` timeout = 1ms
+- Consecutive conversion failures → DAC running blind without feedback
+- After limit reached → Emergency shutdown, marks `ina226_available = false`
+- Slave reports to master: `000,ina_fail,{deviceId}`
+
+**4. Manual Emergency Command:**
+- User sends `emergency` or `e` command via serial
+- Triggers immediate shutdown on master
+
+### `emergencyShutdown()` Function
+
+```cpp
+void emergencyShutdown() {
+    bool alreadyActive = emergencyShutdownActive;
+    emergencyShutdownActive = true;       // Sticky flag - prevents interrupt re-activation
+
+    analogWrite(dacPin, 0);               // DAC off immediately
+    digitalWrite(userLedPin, LOW);
+
+    // Reset runtime control variables (preserve program config for restart via 'start')
+    last_adjusted_dac = 0;
+    current_dac_value = 0;
+    closeloop_active = false;
+    dac_output_active = false;
+    overcurrent_consecutive_count = 0;
+    conversion_miss_count = 0;
+
+    programDuration = 0;                  // Stop frame execution
+    frameExecutionActive = false;
+    digitalWrite(triggerOutPin, HIGH);    // Ensure trigger line inactive
+
+    // Master broadcasts shutdown to all devices (once - guard prevents infinite loops)
+    if (isMasterDevice && !alreadyActive) {
+        Serial1.println("000,dac,0");
+    }
+}
+```
+
+### Chain-Wide Emergency Propagation
+
+**Overcurrent on any device:**
+```
+Device detects overcurrent → emergencyShutdown() locally
+  → Slave sends 000,overcurrent,{deviceId} through chain
+  → Each slave in chain: emergencyShutdown() + forward
+  → Master receives: emergencyShutdown() + broadcasts 000,dac,0
+  → All remaining devices: emergencyShutdown()
+```
+
+**INA226 failure on any device:**
+```
+Device detects INA226 failure → emergencyShutdown() locally
+  → Slave sends 000,ina_fail,{deviceId} through chain
+  → Each slave in chain: emergencyShutdown() + forward
+  → Master receives: emergencyShutdown() + broadcasts 000,dac,0
+  → All remaining devices: emergencyShutdown()
+```
+
+**Master-initiated shutdown (manual or self-detected):**
+```
+Master calls emergencyShutdown()
+  → Broadcasts 000,dac,0 to chain
+  → Each slave receives dac,0: emergencyShutdown() + forward to next slave
+```
+
+### Emergency State Variables
+```cpp
+bool emergencyShutdownActive = false;    // Sticky flag: prevents trigger re-activation
+const int overcurrent_consecutive_count_limit = 3;   // Configurable overcurrent threshold
+const int conversion_miss_count_limit = 3;           // Configurable conversion miss threshold
+```
+
+### Recovery
+- `emergencyShutdownActive` is a **sticky flag** — it persists until cleared
+- Cleared by:
+  - `start` command: Clears flag and re-calibrates from Frame_0
+  - `calibration,start` (slaves): Clears flag for fresh start
+- While active:
+  - `handleProgramExecution()` returns immediately (line: `if (!frameExecutionActive || emergencyShutdownActive) return;`)
+  - `triggerInterrupt()` will NOT re-activate closeloop (blocked by `emergencyShutdownActive` check)
+  - DAC stays at 0, all outputs inactive
+- User message: `"System shutdown complete. Use 'start' to re-calibrate and resume."`
+
+### Implementation Checklist
+- [x] Add `emergencyShutdownActive` sticky flag variable
+- [x] Add configurable `overcurrent_consecutive_count_limit` (default: 3)
+- [x] Add configurable `conversion_miss_count_limit` (default: 3)
+- [x] Implement `emergencyShutdown()` function with:
+  - [x] Sticky flag set (prevents interrupt re-activation)
+  - [x] DAC off + userLedPin off
+  - [x] Runtime variable reset (preserve program config)
+  - [x] Frame execution stop
+  - [x] Trigger line HIGH (inactive)
+  - [x] Master-only broadcast guard (`!alreadyActive` prevents infinite loops)
+- [x] Add overcurrent detection in `handleCurrentControl()`:
+  - [x] Consecutive count tracking with configurable limit
+  - [x] WARNING on first over-threshold reading
+  - [x] DAC increase blocked during overcurrent warning
+  - [x] Full shutdown on consecutive limit reached
+  - [x] Counter reset on normal reading or closeloop deactivation
+- [x] Add INA226 garbage reading detection (NaN / < -10mA):
+  - [x] Mark `ina226_available = false`
+  - [x] Trigger emergency shutdown
+  - [x] Slave reports `000,ina_fail,{deviceId}` to master
+- [x] Add INA226 conversion timeout detection:
+  - [x] Consecutive miss tracking with configurable limit
+  - [x] Emergency shutdown when limit reached
+  - [x] Mark `ina226_available = false`
+  - [x] Slave reports `000,ina_fail,{deviceId}` to master
+- [x] Add chain propagation handlers in `processCommand()`:
+  - [x] `ina_fail` command: emergency shutdown + forward
+  - [x] `overcurrent` command: emergency shutdown + forward
+  - [x] `dac,0` command: emergency shutdown + slave-forward (master consumes)
+- [x] Add manual `emergency` / `e` command in master serial handler
+- [x] Add `emergencyShutdownActive` guard in `triggerInterrupt()` (prevent closeloop re-activation)
+- [x] Add `emergencyShutdownActive` guard in `handleProgramExecution()` (prevent frame execution)
+- [x] Clear `emergencyShutdownActive` in `start` command for fresh start
+- [x] Clear `emergencyShutdownActive` in slave `calibration,start` handler
