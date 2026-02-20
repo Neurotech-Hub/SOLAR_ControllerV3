@@ -580,10 +580,10 @@ void loop()
                     return;
                 }
                 
-                if (delay < 0 || delay > 100)
+                if (delay < 5)
                 {
                     Serial.println("ERR:INTERFRAME_DELAY_RANGE:" + String(delay));
-                    Serial.println("UI:Interframe delay must be 0-100 milliseconds");
+                    Serial.println("UI:Interframe delay must be at least 5 milliseconds");
                     return;
                 }
                 
@@ -1414,7 +1414,7 @@ bool parseProgramCommand(String value, int &group_id, int &group_total, float &c
     // Validate parsed values
     if (group_total < 1 || group_id < 0 || group_id > group_total || 
         current < 0 || current > maxCurrent_mA || 
-        exposure < 1 || exposure > 100) {
+        exposure < 10) {
         return false;
     }
     
@@ -1514,7 +1514,7 @@ void printHelp()
     Serial.println("UI:      - group_id: Group number (1-n)");
     Serial.println("UI:      - group_total: Total groups");
     Serial.println("UI:      - current: Target current in mA (0-1500)");
-    Serial.println("UI:      - exposure: Duration in ms (1-100)");
+    Serial.println("UI:      - exposure: Duration in ms (>=10)");
     Serial.println("UI:      - DAC auto-calibrated during Frame_0");
     Serial.println("UI:    frame,count,interframe_delay - Set frame parameters");
     Serial.println("UI:    start - Start Frame_0 calibration + user frames");

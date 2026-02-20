@@ -270,7 +270,7 @@ class SolarController:
                    textvariable=self.current_var, width=10).grid(row=1, column=1, padx=5, sticky=tk.W)
         
         ttk.Label(prog_param_frame, text="Exposure (ms):").grid(row=1, column=2, padx=5, sticky=tk.W)
-        ttk.Spinbox(prog_param_frame, from_=1, to=100, 
+        ttk.Spinbox(prog_param_frame, from_=10, to=1000000, 
                    textvariable=self.exposure_var, width=10).grid(row=1, column=3, padx=5, sticky=tk.W)
         
         # Initialize dropdowns and states
@@ -291,7 +291,7 @@ class SolarController:
                    textvariable=self.frame_count_var, width=10).grid(row=0, column=1, padx=5, sticky=tk.W)
         
         ttk.Label(frame_config_frame, text="Interframe Delay (ms):").grid(row=0, column=2, padx=5, sticky=tk.W)
-        ttk.Spinbox(frame_config_frame, from_=0, to=100, 
+        ttk.Spinbox(frame_config_frame, from_=5, to=1000000, 
                    textvariable=self.interframe_delay_var, width=10).grid(row=0, column=3, padx=5, sticky=tk.W)
         
         # Frame button
@@ -571,8 +571,8 @@ class SolarController:
             messagebox.showerror("Invalid Current", "Current must be between 0 and 1500 mA")
             return
         
-        if exposure < 1 or exposure > 100:
-            messagebox.showerror("Invalid Exposure", "Exposure must be between 1 and 100 ms")
+        if exposure < 10:
+            messagebox.showerror("Invalid Exposure", "Exposure must be at least 10 ms")
             return
         
         if group_id < 1 or group_id > group_total:
@@ -598,8 +598,8 @@ class SolarController:
             messagebox.showerror("Invalid Frame Count", "Frame count must be between 1 and 1000")
             return
         
-        if interframe_delay < 0 or interframe_delay > 100:
-            messagebox.showerror("Invalid Delay", "Interframe delay must be between 0 and 100 ms")
+        if interframe_delay < 5:
+            messagebox.showerror("Invalid Delay", "Interframe delay must be at least 5 ms")
             return
         
         command = f"frame,{frame_count},{interframe_delay}"

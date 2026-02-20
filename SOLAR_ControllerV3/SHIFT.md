@@ -95,7 +95,7 @@ This should be established using the following command structure:
 - `group_id`: Group number for this device (1-n, 0=inactive)
 - `group_total`: Total number of groups in the system
 - `current`: Target current in mA (0-1500) for closeloop regulation
-- `exposure`: LED exposure duration in milliseconds (1-100)
+- `exposure`: LED exposure duration in milliseconds (minimum 10)
 
 **Note:** The `initial_dac` value is NO LONGER user-specified. It is automatically calibrated during Frame_0 (see Auto-Calibration System below).
 
@@ -128,7 +128,7 @@ bool parseProgramCommand(String value, int &group_id, int &group_total,
     // Validate parsed values
     if (group_total < 1 || group_id < 0 || group_id > group_total || 
         current < 0 || current > 1500 || 
-        exposure < 1 || exposure > 100) {
+        exposure < 10) {
         return false;
     }
     

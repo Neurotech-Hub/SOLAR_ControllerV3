@@ -147,9 +147,9 @@ python SOLAR_GUI_V3.py
 - [ ] Set Current to 1500 mA
 - [ ] Verify accepts value
 - [ ] Try to set Current > 1500 (if possible)
-- [ ] Set Exposure to 1 ms
+- [ ] Set Exposure to 10 ms
 - [ ] Verify accepts value
-- [ ] Set Exposure to 100 ms
+- [ ] Set Exposure to 500 ms
 - [ ] Verify accepts value
 
 **Test 4.5: Program Command - All Devices**
@@ -168,7 +168,7 @@ python SOLAR_GUI_V3.py
 **Test 4.7: Program Validation**
 - [ ] Try invalid current (e.g., 2000 mA)
 - [ ] Verify error message
-- [ ] Try invalid exposure (e.g., 0 ms or 101 ms)
+- [ ] Try invalid exposure (e.g., 9 ms)
 - [ ] Verify error message
 - [ ] Try invalid group ID (> group_total)
 - [ ] Verify error message
@@ -180,7 +180,7 @@ python SOLAR_GUI_V3.py
 - [ ] Verify accepts value
 - [ ] Set Interframe Delay to 0
 - [ ] Verify accepts value
-- [ ] Set Interframe Delay to 100
+- [ ] Set Interframe Delay to 500
 - [ ] Verify accepts value
 
 **Test 4.9: Set Frame Command**

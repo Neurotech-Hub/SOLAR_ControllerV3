@@ -12,7 +12,7 @@ The architecture moves away from traditional daisy-chained serial commands for t
 
 *   **Automatic DAC Calibration (Frame_0):** System automatically determines optimal DAC values for each device during a calibration phase. No manual DAC tuning required!
 *   **Near-Zero Trigger-to-LED Latency:** For Frame_1+ (after calibration), the validated DAC value is applied directly in the hardware interrupt handler, reducing trigger-to-LED delay from ~1.5ms to single-digit microseconds.
-*   **High-Speed Pulse Control:** The master device can generate timed pulses with millisecond precision (1-100ms), enabling high-frequency operation.
+*   **High-Speed Pulse Control:** The master device can generate timed pulses with millisecond precision (minimum 10ms), enabling high-frequency operation.
 *   **Active Current Control (Closeloop):** Each device uses an onboard INA226 current sensor to dynamically regulate LED output, ensuring stable and accurate current delivery during the entire exposure window.
 *   **Hardware-Synchronized Execution:** All devices in the chain act on the rising and falling edges of a hardware trigger signal, ensuring near-perfect synchronization.
 *   **Group-Based State Machine:** Devices can be programmed into different groups, allowing for the creation of complex sequential patterns (e.g., Group 1 fires, then Group 2, then Group 1 again).
@@ -88,7 +88,7 @@ These commands follow the format `deviceId,command,value`.
 
 | Command Syntax | Description |
 | :--- | :--- |
-| `xxx,program,{g_id,g_total,current,exp}` | Programs a device. `xxx` is device ID (or `000` for all). `g_id` is the group ID (1-based). `g_total` is the total number of unique groups. `current` is the target current in mA (0-1550). `exp` is the exposure time in ms (1-100). **Note:** DAC value is auto-calibrated during Frame_0. |
+| `xxx,program,{g_id,g_total,current,exp}` | Programs a device. `xxx` is device ID (or `000` for all). `g_id` is the group ID (1-based). `g_total` is the total number of unique groups. `current` is the target current in mA (0-1550). `exp` is the exposure time in ms (minimum 10). **Note:** DAC value is auto-calibrated during Frame_0. |
 | `frame,count,delay` | **Master only.** Configures program execution frames. `count` is repetitions of the group sequence. `delay` is the pause in ms between group activations. |
 | `xxx,servo,angle` | Sets the servo position. `angle` is 60-120 degrees. |
 ---

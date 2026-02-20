@@ -72,13 +72,13 @@ Control servo positions (60-120 degrees):
    - **Group ID**: This device's group number (1 to Group Total)
 3. **Set LED Parameters**:
    - **Current (mA)**: Target current 0-1500 mA
-   - **Exposure (ms)**: LED on-time 1-100 ms
+   - **Exposure (ms)**: LED on-time minimum 10 ms
 4. Click **Program** to send configuration
 
 #### Configure Frames
 
 1. **Frame Count**: Number of times to repeat the sequence (1-1000)
-2. **Interframe Delay**: Pause between groups in milliseconds (0-100)
+2. **Interframe Delay**: Pause between groups in milliseconds (minimum 5)
 3. Click **Set Frame** to apply settings
 
 #### Execute
@@ -153,10 +153,10 @@ The system will:
 - **Range Enforcement**: Spinboxes enforce valid ranges:
   - Servo: 60-120°
   - Current: 0-1500 mA
-  - Exposure: 1-100 ms
+  - Exposure: minimum 10 ms
   - Group Total: 1-50
   - Frame Count: 1-1000
-  - Interframe Delay: 0-100 ms
+  - Interframe Delay: minimum 5 ms
 
 ## Technical Details
 
