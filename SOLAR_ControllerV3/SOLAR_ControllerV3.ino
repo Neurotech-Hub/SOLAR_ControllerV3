@@ -6,7 +6,7 @@
 #include <Wire.h>
 
 // Version tracking
-const String CODE_VERSION = "3.3.9";
+const String CODE_VERSION = "3.4.1";
 
 // Pin assignments for ItsyBitsy M4
 const int dacPin = A0;          // DAC output (12-bit, 0-4095)
@@ -30,7 +30,7 @@ INA226 ina226(0x4A);
 
 // INA226 Configuration
 const float shuntResistance = 0.04195;  // 42mΩ shunt
-const float maxCurrent_mA = 1500.0;     // 1.5A max current
+const float maxCurrent_mA = 1550.0;     // 1.5A max current
 bool ina226_available = false;          // INA226 initialization flag
 
 // Command structure
@@ -90,6 +90,10 @@ bool inPulsePhase = true;   // true = pulse active, false = interframe delay act
 bool inCalibrationPhase = false;   // true during Frame_0, false during Frame_1+
 bool calibrationComplete = false;  // Per-device: true after device calibrates (stores in last_adjusted_dac)
 
+// Healthcheck variables (master only)
+bool healthcheck_complete = false;      // true when healthcheck response received from chain
+int healthcheck_failed_device = 0;      // Device ID that failed healthcheck (0 = all passed)
+
 // Per-device status caching (master only)
 struct DeviceStatus {
     int group_id;
@@ -101,8 +105,7 @@ const int MAX_DEVICES = 50; // Maximum supported devices
 DeviceStatus deviceCache[MAX_DEVICES]; // Dynamic device cache based on totalDevices
 
 // DAC control variables
-int currentDacValue = 0;
-int targetDacValue = 0;
+
 int last_adjusted_dac = 0;      // Stores last non-zero DAC value before pulse end (0 = not yet set)
 
 // Timing variables
@@ -131,6 +134,8 @@ bool getGroupSettings(int group_id, int &group_exposure);
 bool validateGroupExposures();
 bool initializeINA226();
 bool calculateCalibration();
+bool probeINA226();
+bool verifyINA226();
 int calculateDacReduction(float currentReading, float targetCurrent);
 int calculateDacIncrement(float currentReading, float targetCurrent);
 void handleCurrentControl();
@@ -143,10 +148,10 @@ bool initializeINA226() {
         return false;
     }
     
-    // Set conversion times: 140µs (0x01)
+    // Set conversion times: 204µs (0x01)
     ina226.setAverage(0x01);  // 1 sample averaging
-    ina226.setBusVoltageConversionTime(0x01);  // 140µs
-    ina226.setShuntVoltageConversionTime(0x01); // 140µs
+    ina226.setBusVoltageConversionTime(0x01);  // 204µs
+    ina226.setShuntVoltageConversionTime(0x01); // 204µs
     ina226.setMode(0x07);  // Continuous shunt and bus voltage
     
     if (!calculateCalibration()) {
@@ -164,6 +169,51 @@ bool calculateCalibration() {
     return (result == 0); // INA226_ERR_NONE = 0
 }
 
+// INA226 Live Probe - verifies sensor is physically responding on I2C
+bool probeINA226() {
+    if (!ina226.waitConversionReady(5)) {  // 5ms timeout
+        return false;  // Chip not responding on I2C
+    }
+    float testRead = ina226.getCurrent_mA();
+    if (isnan(testRead)) {
+        return false;  // Chip responding but returning garbage data
+    }
+    return true;  // Chip is alive and returning valid data
+}
+
+// INA226 Verify - probe first, attempt re-init if needed, return final status
+bool verifyINA226() {
+    // Step 1: If already marked unavailable, try re-initialization
+    if (!ina226_available) {
+        Serial.println("DEBUG: INA226 marked unavailable, attempting re-initialization...");
+        ina226_available = initializeINA226();
+        if (!ina226_available) {
+            Serial.println("ERROR: INA226 re-initialization failed");
+            return false;
+        }
+        Serial.println("DEBUG: INA226 re-initialized successfully");
+    }
+    
+    // Step 2: Live probe - verify chip is actually responding right now
+    if (!probeINA226()) {
+        Serial.println("WARNING: INA226 not responding to live probe, attempting re-initialization...");
+        ina226_available = initializeINA226();
+        if (!ina226_available) {
+            Serial.println("ERROR: INA226 re-initialization failed after probe failure");
+            return false;
+        }
+        // Verify probe works after re-init
+        if (!probeINA226()) {
+            Serial.println("ERROR: INA226 still not responding after re-initialization");
+            ina226_available = false;
+            return false;
+        }
+        Serial.println("DEBUG: INA226 recovered after re-initialization");
+    }
+    
+    return true;
+}
+
 int calculateDacReduction(float currentReading, float targetCurrent) {
     if (targetCurrent <= 0) return 0;  // Avoid division by zero
     
@@ -171,7 +221,7 @@ int calculateDacReduction(float currentReading, float targetCurrent) {
     
     // If current > target_current*n% then reduce by n/2 points
     if (percentageOver >= 50.0) {
-        return 50;  // 50% or more: reduce by 100 points
+        return 50;  // 50% or more: reduce by 50 points
     } else if (percentageOver >= 40.0) {
         return 25;   // 40% or more: reduce by 25 points
     } else if (percentageOver >= 30.0) {
@@ -256,8 +306,7 @@ void setup()
     analogWrite(dacPin, 0);     // Start with DAC off
     
     // Reset all control variables to safe state
-    currentDacValue = 0;
-    targetDacValue = 0;
+
     last_adjusted_dac = 0;
 
     // Initialize program variables
@@ -393,6 +442,51 @@ void loop()
                     Serial.println("UI:All devices in a group must have the same exposure time");
                     Serial.println("UI:Check status command to see programmed values");
                     return;
+                }
+                
+                // CHECKPOINT: Verify master's own INA226 is available and responding
+                if (!verifyINA226()) {
+                    Serial.println("ERR:INA226_UNAVAILABLE");
+                    Serial.println("UI:Master INA226 current sensor not responding");
+                    Serial.println("UI:Check I2C connections at address 0x4A");
+                    return;
+                }
+                Serial.println("DEBUG: Master INA226 checkpoint passed");
+                
+                // HEALTHCHECK: Verify all slave devices' INA226 before starting
+                if (totalDevices > 1) {
+                    healthcheck_complete = false;
+                    healthcheck_failed_device = 0;
+                    Serial.println("DEBUG: Sending healthcheck to all devices...");
+                    Serial1.println("000,healthcheck,0");
+                    
+                    // Wait for healthcheck response (timeout 2 seconds)
+                    unsigned long hcStart = millis();
+                    while (!healthcheck_complete && (millis() - hcStart < 2000)) {
+                        if (Serial1.available()) {
+                            String hcData = Serial1.readStringUntil('\n');
+                            hcData.trim();
+                            if (hcData.length() > 0) {
+                                processCommand(hcData);
+                            }
+                        }
+                    }
+                    
+                    if (!healthcheck_complete) {
+                        Serial.println("ERR:HEALTHCHECK_TIMEOUT");
+                        Serial.println("UI:Healthcheck timed out - check device chain");
+                        return;
+                    }
+                    
+                    if (healthcheck_failed_device > 0) {
+                        Serial.println("ERR:INA226_UNAVAILABLE");
+                        Serial.println("UI:Device " + String(healthcheck_failed_device) + " failed INA226 healthcheck");
+                        Serial.println("UI:Aborting start - all devices must pass INA226 check");
+                        return;
+                    }
+                    Serial.println("DEBUG: All devices passed healthcheck");
+                } else {
+                    Serial.println("DEBUG: Single device - skipping chain healthcheck");
                 }
                 
                 // CRITICAL: Reset ALL control values for clean start
@@ -644,7 +738,7 @@ void handleCurrentControl() {
     if (!closeloop_active) {
         // Closeloop is disabled - ensure DAC output is off once
         if (dac_output_active) {
-            Serial.println("DEBUG: Last adjusted DAC=" + String(current_dac_value));
+            // Serial.println("DEBUG: Last adjusted DAC=" + String(current_dac_value));
             last_adjusted_dac = current_dac_value;
             analogWrite(dacPin, 0);
             dac_output_active = false;
@@ -678,30 +772,48 @@ void handleCurrentControl() {
     }
     
     // Serial.println("DEBUG: Current DAC value: " + String(current_dac_value));
-    // Wait for conversion ready with 1ms timeout to get fresh current reading
-    if (ina226.waitConversionReady(1)) {
+    // Wait for conversion ready with 2ms timeout to get fresh current reading
+    if (ina226.waitConversionReady(2)) {
         // Read current feedback from INA226
         measured_current_mA = ina226.getCurrent_mA();
-        // Serial.print("DEBUG: I: "); Serial.print(measured_current_mA); Serial.print("(mA) | DAC: "); Serial.println(current_dac_value);
         
-        // CRITICAL: Emergency shutdown check - current > maxCurrent * 1.01 for TWO CONSECUTIVE readings
-        if (measured_current_mA > (maxCurrent_mA * 1.01)) {
+        // SAFETY: Detect garbage readings (NaN or negative) - indicates INA226 communication failure
+        if (isnan(measured_current_mA) || measured_current_mA < -10.0) {
+            Serial.println("EMERGENCY: INA226 garbage reading detected: " + String(measured_current_mA) + "mA");
+            ina226_available = false;  // Mark sensor as failed
+            
+            emergencyShutdown();
+            
+            // Report INA226 failure through chain so master can abort all frames
+            if (!isMasterDevice) {
+                Serial1.println("000,ina_fail," + String(myDeviceId));
+                if (Serial) {
+                    Serial.println("DEBUG: Sent ina_fail report for device " + String(myDeviceId));
+                }
+            }
+            return;
+        }
+        
+        Serial.print("DEBUG: I: "); Serial.print(measured_current_mA); Serial.print("(mA) | DAC: "); Serial.println(current_dac_value);
+        
+        // CRITICAL: Emergency shutdown check - current > maxCurrent for TWO CONSECUTIVE readings
+        if (measured_current_mA > (maxCurrent_mA)) {
             overcurrent_consecutive_count++;
             
             if (overcurrent_consecutive_count == 1) {
                 // First over-threshold reading - log warning
                 Serial.println("WARNING: Overcurrent detected (reading #1): " + 
                               String(measured_current_mA) + "mA on device " + String(myDeviceId));
-                Serial.println("WARNING: Threshold: " + String(maxCurrent_mA * 1.01) + 
+                Serial.println("WARNING: Threshold: " + String(maxCurrent_mA) + 
                               "mA - Monitoring for consecutive reading");
-            } else if (overcurrent_consecutive_count >= 2) {
+            } else if (overcurrent_consecutive_count >= 3) {
                 // Second consecutive over-threshold - EMERGENCY SHUTDOWN
                 digitalWrite(userLedPin, LOW);
                 analogWrite(dacPin, 0);
                 current_dac_value = 0;
                 closeloop_active = false;
                 
-                Serial.println("EMERGENCY: Current exceeded " + String(maxCurrent_mA * 1.01) + 
+                Serial.println("EMERGENCY: Current exceeded " + String(maxCurrent_mA) + 
                               " mA on device " + String(myDeviceId));
                 Serial.println("EMERGENCY: Measured " + String(measured_current_mA) + 
                               " mA (2 consecutive readings) - SHUTDOWN");
@@ -824,14 +936,14 @@ void handleProgramExecution()
                     
                     // CRITICAL: Broadcast calibration end to ALL slave devices
                     Serial1.println("000,calibration,end");
-                    Serial.println("DEBUG: Broadcasted calibration end to all slave devices");
+                    // Serial.println("DEBUG: Broadcasted calibration end to all slave devices");
                     
                     inCalibrationPhase = false;
                     currentFrameLoop = 1;  // Start Frame_1
                     
                     // Calculate total loops for user frames
                     totalLoops = frameCount * group_total;
-                    Serial.println("DEBUG: Starting user frames - Total loops: " + String(totalLoops));
+                    // Serial.println("DEBUG: Starting user frames - Total loops: " + String(totalLoops));
                     
                     // Continue to next group for Frame_1
                 }
@@ -937,7 +1049,7 @@ void processCommand(String data)
                 // Received final count
                 totalDevices = cmd.value.toInt();
                 currentState = CHAIN_READY;
-                Serial.println("INIT:TOTAL:" + String(totalDevices));
+                Serial.println("TOTAL:" + String(totalDevices));
                 Serial.println("UI:Ready for commands");
             }
             else
@@ -963,6 +1075,66 @@ void processCommand(String data)
             }
         }
         return;
+    }
+
+    // Handle healthcheck command (pre-start INA226 verification for all devices)
+    if (cmd.command == "healthcheck")
+    {
+        if (isMasterDevice) {
+            // Master: Receive healthcheck result from chain
+            healthcheck_failed_device = cmd.value.toInt();
+            healthcheck_complete = true;
+            if (healthcheck_failed_device > 0) {
+                Serial.println("HEALTHCHECK:FAIL:DEV" + String(healthcheck_failed_device));
+            } else {
+                Serial.println("HEALTHCHECK:PASS");
+            }
+        } else {
+            // Slave: Check own INA226 and forward result
+            int upstreamResult = cmd.value.toInt();
+            if (upstreamResult > 0) {
+                // Upstream device already failed - just forward the failure
+                Serial1.println("000,healthcheck," + String(upstreamResult));
+                if (Serial) {
+                    Serial.println("DEBUG: Forwarding upstream healthcheck failure (device " + String(upstreamResult) + ")");
+                }
+            } else {
+                // No upstream failure - check our own INA226
+                if (verifyINA226()) {
+                    Serial1.println("000,healthcheck,0");  // Pass
+                    if (Serial) {
+                        Serial.println("DEBUG: Device " + String(myDeviceId) + " healthcheck passed");
+                    }
+                } else {
+                    Serial1.println("000,healthcheck," + String(myDeviceId));  // Fail
+                    if (Serial) {
+                        Serial.println("ERROR: Device " + String(myDeviceId) + " healthcheck FAILED");
+                    }
+                }
+            }
+        }
+        return;  // Custom forwarding - don't use generic forwarding
+    }
+
+    // Handle ina_fail command (mid-operation INA226 failure report from slave)
+    if (cmd.command == "ina_fail")
+    {
+        int failedDeviceId = cmd.value.toInt();
+        if (isMasterDevice) {
+            // Master: A slave reported INA226 failure mid-operation - abort everything
+            Serial.println("EMERGENCY: Device " + String(failedDeviceId) + " reported INA226 failure mid-operation");
+            Serial.println("EMERGENCY: Aborting all frame execution");
+            emergencyShutdown();  // Broadcasts 000,dac,0 to all devices
+        } else {
+            // Slave: Another device failed - emergency shutdown and forward
+            if (Serial) {
+                Serial.println("EMERGENCY: Device " + String(failedDeviceId) + " reported INA226 failure - shutting down");
+            }
+            emergencyShutdown();
+            // Forward ina_fail to next device in chain (towards master)
+            Serial1.println("000,ina_fail," + String(failedDeviceId));
+        }
+        return;  // Custom forwarding - don't use generic forwarding
     }
 
     // Process command if:
@@ -1034,10 +1206,20 @@ void processCommand(String data)
         else if (cmd.command == "calibration")
         {
             if (cmd.value == "start") {
+                // CHECKPOINT: Verify INA226 before entering calibration (defense-in-depth)
+                if (!verifyINA226()) {
+                    if (Serial) {
+                        Serial.println("ERROR: INA226 failed on device " + String(myDeviceId) + " during calibration start");
+                        Serial.println("ERR:INA226_UNAVAILABLE");
+                    }
+                    // Report failure through chain so master aborts
+                    Serial1.println("000,ina_fail," + String(myDeviceId));
+                    return;
+                }
                 inCalibrationPhase = true;
                 calibrationComplete = false;
                 if (Serial && !isMasterDevice) {
-                    Serial.println("DEBUG: Slave entering calibration mode - using fast DAC increment");
+                    Serial.println("DEBUG: INA226 checkpoint passed, slave entering calibration mode");
                 }
             } else if (cmd.value == "end") {
                 inCalibrationPhase = false;
@@ -1349,13 +1531,18 @@ void emergencyShutdown()
     digitalWrite(userLedPin, LOW);
     
     // Reset control variables
-    currentDacValue = 0;
-    targetDacValue = 0;
+
     last_adjusted_dac = 0;
+    current_dac_value = 0;
+    closeloop_active = false;
+    dac_output_active = false;
+    last_current_state = 0;
     
     // Reset program variables
     target_current_mA = 0;
     programDuration = 0;
+    overcurrent_consecutive_count = 0;
+    frameExecutionActive = false;
     
     // Ensure trigger line is HIGH (inactive)
     digitalWrite(triggerOutPin, HIGH);
@@ -1372,6 +1559,7 @@ void emergencyShutdown()
     if (Serial) {
         Serial.println("System shutdown complete. Check hardware and restart.");
     }
+
 }
 
 // Function to get exposure for a specific group from device cache (DAC is auto-calibrated)
