@@ -6,18 +6,21 @@ This firmware is designed for the Adafruit ItsyBitsy M4, creating a high-speed, 
 
 The architecture moves away from traditional daisy-chained serial commands for timing control and instead implements a hardware-based **trigger chain**. A single master device sends programming commands down a serial line, but a dedicated trigger line is used to initiate actions. This allows for highly synchronized, low-latency execution of complex, multi-group lighting sequences.
 
-**NEW in v3.3:** The system now features **automatic DAC calibration** (Frame_0), eliminating the need to manually determine optimal DAC values for each device. Simply specify your target current, and the system automatically finds the right DAC value during calibration phase before executing programmed frames.
+**NEW in v3.5:** The system now features **near-zero trigger-to-LED latency** for Frame_1+ using ISR-level DAC output, **multi-layered safety protection** with blind time watchdog, **INA226 healthcheckup at calibration** and **slave-to-master fault reporting** for overcurrent, INA226 failure, and DAC blind timeout events across the entire device chain.
 
 ## Key Features
 
-*   **Automatic DAC Calibration (Frame_0):** System automatically determines optimal DAC values for each device during a 1-second calibration phase. No manual DAC tuning required!
+*   **Automatic DAC Calibration (Frame_0):** System automatically determines optimal DAC values for each device during a calibration phase. No manual DAC tuning required!
+*   **Near-Zero Trigger-to-LED Latency:** For Frame_1+ (after calibration), the validated DAC value is applied directly in the hardware interrupt handler, reducing trigger-to-LED delay from ~1.5ms to single-digit microseconds.
 *   **High-Speed Pulse Control:** The master device can generate timed pulses with millisecond precision (1-100ms), enabling high-frequency operation.
 *   **Active Current Control (Closeloop):** Each device uses an onboard INA226 current sensor to dynamically regulate LED output, ensuring stable and accurate current delivery during the entire exposure window.
 *   **Hardware-Synchronized Execution:** All devices in the chain act on the rising and falling edges of a hardware trigger signal, ensuring near-perfect synchronization.
 *   **Group-Based State Machine:** Devices can be programmed into different groups, allowing for the creation of complex sequential patterns (e.g., Group 1 fires, then Group 2, then Group 1 again).
 *   **Serial Command Interface:** A simple, human-readable serial command set allows for easy control from a computer, GUI, or other microcontroller.
 *   **Automatic Device Discovery:** A `reinit` command automatically discovers and assigns unique IDs to all devices in the serial chain.
-*   **Enhanced Safety Features:** Consecutive overcurrent detection (requires 2 consecutive readings above threshold) prevents false positives while maintaining robust protection. Includes real-time warnings and automatic emergency shutdown.
+*   **Multi-Layered Safety Protection:** Consecutive overcurrent detection, INA226 garbage reading detection, conversion timeout monitoring, and a blind time watchdog ensure robust protection against all fault scenarios.
+*   **Slave-to-Master Fault Reporting:** Any device in the chain can report faults (overcurrent, INA226 failure, blind timeout) back to the master, which triggers a chain-wide emergency shutdown.
+*   **INA226 Pre-Start Healthcheck:** Before program execution, the master verifies that every device's INA226 sensor is responding. Devices with failed sensors are identified and reported, preventing blind operation.
 *   **System Integrity Check:** The master device can verify the integrity of the trigger chain by checking if the signal successfully propagates through all devices and returns.
 
 
@@ -41,14 +44,43 @@ The current control system uses an INA226 sensor with the following default conf
 | :--- | :--- |
 | **I2C Address** | `0x4A` |
 | **Shunt Resistance** | `0.04195 Ω` |
-| **Max Current** | `1500 mA` |
-| **Conversion Time** | `140 µs` |
+| **Max Current** | `1550 mA` |
+| **Conversion Time** | `204 µs` (bus and shunt) |
+| **Averaging** | 4 samples |
 | **Regulation Target** | 99% of target current (safety buffer) |
-| **Overcurrent Threshold** | 1515 mA (101% of max) |
-| **Emergency Trigger** | 2 consecutive readings above threshold |
+| **Overcurrent Threshold** | `1550 mA` |
+| **Emergency Trigger** | 3 consecutive readings above threshold (configurable) |
 
-**Safety Note:** The system requires **two consecutive** INA226 readings above 1515mA to trigger emergency shutdown. This prevents false positives from transient spikes while maintaining robust protection. A warning is logged on the first over-threshold reading, and DAC increases are blocked until current normalizes.
+### Safety System
 
+The firmware implements multiple layers of safety protection:
+
+| Safety Layer | Trigger Condition | Action |
+| :--- | :--- | :--- |
+| **Overcurrent Detection** | 3 consecutive INA226 readings above 1550mA | Emergency shutdown + slave reports `overcurrent` to master |
+| **INA226 Garbage Reading** | NaN or extremely negative current reading (< -10mA) | Marks sensor failed + emergency shutdown + reports `ina_fail` |
+| **INA226 Conversion Timeout** | 3 consecutive conversion-not-ready events (~6ms blind) | Marks sensor failed + emergency shutdown + reports `ina_fail` |
+| **Blind Time Watchdog** | DAC applied in ISR without INA226 feedback for > 5ms | Emergency shutdown + reports `blind_timeout` |
+| **Pre-Start Healthcheck** | INA226 not responding on any device before `start` | `start` aborted, failed device ID reported |
+| **Manual Emergency** | User sends `emergency` or `e` command | Immediate chain-wide shutdown |
+
+**Safety Note:** The overcurrent detector requires **3 consecutive** INA226 readings above 1550mA to trigger emergency shutdown. This prevents false positives from transient spikes while maintaining robust protection. A warning is logged on the first over-threshold reading, and DAC increases are blocked until current normalizes.
+
+**Blind Time Watchdog:** When a validated DAC value is applied directly in the ISR for near-zero latency (Frame_1+), the blind time watchdog ensures the INA226 closeloop takes over within 5ms. If the INA226 fails to provide feedback in time, the system triggers an emergency shutdown — preventing uncontrolled DAC output.
+
+### Fault Propagation
+
+When any device in the chain detects a fault, the event propagates through the serial chain to the master:
+
+```
+Device detects fault → emergencyShutdown() locally
+  → Slave sends 000,{fault_type},{deviceId} through chain
+  → Each intermediate slave: emergencyShutdown() + forward
+  → Master receives: emergencyShutdown() + broadcasts 000,dac,0
+  → All remaining devices: emergencyShutdown()
+```
+
+Fault types: `overcurrent`, `ina_fail`, `blind_timeout`
 
 ### Device Commands
 
@@ -56,7 +88,7 @@ These commands follow the format `deviceId,command,value`.
 
 | Command Syntax | Description |
 | :--- | :--- |
-| `xxx,program,{g_id,g_total,current,exp}` | Programs a device. `xxx` is device ID (or `000` for all). `g_id` is the group ID (1-based). `g_total` is the total number of unique groups. `current` is the target current in mA (0-1500). `exp` is the exposure time in ms (1-100). **Note:** DAC value is auto-calibrated during Frame_0. |
+| `xxx,program,{g_id,g_total,current,exp}` | Programs a device. `xxx` is device ID (or `000` for all). `g_id` is the group ID (1-based). `g_total` is the total number of unique groups. `current` is the target current in mA (0-1550). `exp` is the exposure time in ms (1-100). **Note:** DAC value is auto-calibrated during Frame_0. |
 | `frame,count,delay` | **Master only.** Configures program execution frames. `count` is repetitions of the group sequence. `delay` is the pause in ms between group activations. |
 | `xxx,servo,angle` | Sets the servo position. `angle` is 60-120 degrees. |
 ---
@@ -112,13 +144,19 @@ Set the program to run for 5 frames (meaning the full 1->2 group sequence will r
 
 ### Step 4: Run the Program
 
-Now, simply start the entire pre-configured sequence. The system will automatically run Frame_0 calibration first.
+Now, simply start the entire pre-configured sequence. The system will automatically run a healthcheck and Frame_0 calibration first.
 
 1.  Send the `start` command:
     ```
     start
     ```
 2.  **Result:** The master device will now take control. You will see real-time logging in the serial monitor:
+
+    **Pre-Start Healthcheck:**
+    ```
+    DEBUG: Sending healthcheck to all devices...
+    DEBUG: All devices passed INA226 healthcheck
+    ```
 
     **Frame_0 - Auto-Calibration Phase (100ms*group_total):**
     ```
@@ -132,6 +170,7 @@ Now, simply start the entire pre-configured sequence. The system will automatica
     
     **Frame_1 through Frame_5 - User Frames:**
     *   Group 1 (Devs 1 & 4) will activate for 30ms, regulating current to 1300mA using calibrated DAC.
+    *   On Frame_1+, the calibrated DAC value is applied directly in the ISR for near-zero trigger-to-LED latency.
     *   The system will pause for 50ms.
     *   Group 2 (Devs 2 & 3) will activate for 20ms, regulating current to 1200mA using calibrated DAC.
     *   The system will pause for 50ms.

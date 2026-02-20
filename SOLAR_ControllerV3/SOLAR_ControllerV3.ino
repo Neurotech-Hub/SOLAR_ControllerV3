@@ -6,7 +6,7 @@
 #include <Wire.h>
 
 // Version tracking
-const String CODE_VERSION = "3.5.1";
+const String CODE_VERSION = "3.5.2";
 
 // Pin assignments for ItsyBitsy M4
 const int dacPin = A0;          // DAC output (12-bit, 0-4095)
@@ -116,6 +116,10 @@ int last_adjusted_dac = 0;      // Stores last non-zero DAC value before pulse e
 // Timing variables
 unsigned long programStartTime = 0;
 unsigned long programDuration = 0;
+
+// Blind time watchdog: detects if DAC is on without current feedback
+const unsigned long MAX_BLIND_TIME_MS = 5;  // Max ms DAC can run without INA226 feedback
+volatile unsigned long dac_blind_start_ms = 0;  // Timestamp when DAC applied in ISR (0 = not blind)
 
 // Volatile variables for interrupt handling
 volatile bool triggerStateChanged = false;
@@ -326,6 +330,7 @@ void setup()
     measured_current_mA = 0;
     closeloop_active = false;
     dac_output_active = false;
+    dac_blind_start_ms = 0;
     last_current_state = 0;
     overcurrent_consecutive_count = 0;
     
@@ -508,6 +513,7 @@ void loop()
                 measured_current_mA = 0;  // Reset measured current
                 closeloop_active = false;  // Ensure closeloop starts inactive
                 dac_output_active = false;  // Ensure DAC output tracking is reset
+                dac_blind_start_ms = 0;  // Clear blind watchdog
                 overcurrent_consecutive_count = 0;  // Reset overcurrent counter
                 last_current_state = 0;  // Reset LED state tracking
 
@@ -705,9 +711,16 @@ void triggerInterrupt()
             if (last_adjusted_dac > 0 && last_adjusted_dac != dacMax) {
                 // Have calibrated value - use it (Frame_1+)
                 current_dac_value = last_adjusted_dac;
+                // IMMEDIATE DAC OUTPUT: Apply validated DAC value in ISR for near-zero latency
+                // Safe because last_adjusted_dac was verified by closeloop in a prior frame
+                analogWrite(dacPin, current_dac_value);
+                dac_output_active = true;
+                dac_blind_start_ms = millis();  // Start blind time watchdog
             } else {
                 // No calibrated value yet - start from calibration DAC (Frame_0)
+                // Do NOT apply DAC in ISR - wait for handleCurrentControl() with INA226 feedback
                 current_dac_value = dacCalibrationStart;
+                dac_blind_start_ms = 0;  // No blind time (DAC not applied yet)
             }
             closeloop_active = true;  // Activate closeloop
             // Serial.println("DEBUG: Trigger State: LOW");
@@ -720,6 +733,7 @@ void triggerInterrupt()
         }
         // Serial.println("DEBUG: Trigger State: High");
         closeloop_active = false;  // Deactivate closeloop
+        dac_blind_start_ms = 0;    // Clear blind watchdog on pulse end
         
         // Only slave devices rotate to next group based on trigger signal
         // Master device handles current_group updates in handleProgramExecution()
@@ -751,12 +765,29 @@ void handleCurrentControl() {
         return;
     }
     
+    // BLIND TIME WATCHDOG: Emergency shutdown if DAC was applied in ISR
+    // but INA226 feedback hasn't arrived within MAX_BLIND_TIME_MS
+    if (dac_blind_start_ms > 0) {
+        unsigned long blind_elapsed = millis() - dac_blind_start_ms;
+        if (blind_elapsed > MAX_BLIND_TIME_MS) {
+            Serial.println("EMERGENCY: DAC blind for " + String(blind_elapsed) + 
+                          "ms without INA226 feedback on device " + String(myDeviceId));
+            emergencyShutdown();
+            
+            if (!isMasterDevice) {
+                Serial1.println("000,blind_timeout," + String(myDeviceId));
+            }
+            return;
+        }
+    }
+    
     if (!ina226_available) {
         // INA226 not available - cannot control DAC safely
         Serial.println("ERROR: INA226 not available - closeloop disabled");
         closeloop_active = false;
         analogWrite(dacPin, 0);
         current_dac_value = 0;
+        dac_blind_start_ms = 0;
         digitalWrite(userLedPin, LOW);
         last_current_state = 0;
         return;
@@ -768,6 +799,7 @@ void handleCurrentControl() {
         closeloop_active = false;
         analogWrite(dacPin, 0);
         current_dac_value = 0;
+        dac_blind_start_ms = 0;
         digitalWrite(userLedPin, LOW);
         last_current_state = 0;
         return;
@@ -777,6 +809,7 @@ void handleCurrentControl() {
     // Wait for conversion ready with 2ms timeout to get fresh current reading
     if (ina226.waitConversionReady(2)) {
         conversion_miss_count = 0;  // Reset on successful conversion
+        dac_blind_start_ms = 0;     // INA226 feedback received - clear blind watchdog
         // Read current feedback from INA226
         measured_current_mA = ina226.getCurrent_mA();
         
@@ -1174,6 +1207,26 @@ void processCommand(String data)
         return;  // Custom forwarding - don't use generic forwarding
     }
 
+    // Handle blind_timeout command (DAC ran without INA226 feedback too long)
+    if (cmd.command == "blind_timeout")
+    {
+        int failedDeviceId = cmd.value.toInt();
+        if (isMasterDevice) {
+            // Master: A slave's DAC ran blind too long - abort everything
+            Serial.println("EMERGENCY: Device " + String(failedDeviceId) + " DAC blind timeout");
+            emergencyShutdown();  // Broadcasts 000,dac,0 to all devices
+        } else {
+            // Slave: Another device had blind timeout - emergency shutdown and forward
+            if (Serial) {
+                Serial.println("EMERGENCY: Device " + String(failedDeviceId) + " DAC blind timeout - shutting down");
+            }
+            emergencyShutdown();
+            // Forward to next device in chain (towards master)
+            Serial1.println("000,blind_timeout," + String(failedDeviceId));
+        }
+        return;  // Custom forwarding - don't use generic forwarding
+    }
+
     // Handle dac,0 command (emergency shutdown broadcast from master)
     if (cmd.command == "dac" && cmd.value.toInt() == 0)
     {
@@ -1273,6 +1326,7 @@ void processCommand(String data)
                 last_adjusted_dac = 0;  // Reset for fresh calibration
                 current_dac_value = dacCalibrationStart;  // Reset DAC to start value (1300)
                 dac_output_active = false;  // Reset DAC output tracking
+                dac_blind_start_ms = 0;  // Clear blind watchdog
                 overcurrent_consecutive_count = 0;  // Reset overcurrent counter
                 if (Serial && !isMasterDevice) {
                     Serial.println("DEBUG: INA226 checkpoint passed, slave entering calibration mode");
@@ -1596,6 +1650,7 @@ void emergencyShutdown()
     current_dac_value = 0;
     closeloop_active = false;
     dac_output_active = false;
+    dac_blind_start_ms = 0;
     last_current_state = 0;
     overcurrent_consecutive_count = 0;
     conversion_miss_count = 0;
