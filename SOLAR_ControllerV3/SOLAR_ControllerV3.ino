@@ -6,7 +6,7 @@
 #include <Wire.h>
 
 // Version tracking
-const String CODE_VERSION = "3.5.2";
+const String CODE_VERSION = "3.5.3";
 
 // Pin assignments for ItsyBitsy M4
 const int dacPin = A0;          // DAC output (12-bit, 0-4095)
@@ -731,9 +731,11 @@ void triggerInterrupt()
             // Store DAC for next frame (works for both Frame_0 and Frame_1+)
             last_adjusted_dac = current_dac_value;
         }
-        // Serial.println("DEBUG: Trigger State: High");
-        closeloop_active = false;  // Deactivate closeloop
-        dac_blind_start_ms = 0;    // Clear blind watchdog on pulse end
+        // IMMEDIATE DAC OFF: near-zero latency LED shutoff in ISR
+        analogWrite(dacPin, 0);
+        dac_output_active = false;
+        closeloop_active = false;
+        dac_blind_start_ms = 0;
         
         // Only slave devices rotate to next group based on trigger signal
         // Master device handles current_group updates in handleProgramExecution()
