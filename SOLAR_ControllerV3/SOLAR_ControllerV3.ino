@@ -6,7 +6,7 @@
 #include <Wire.h>
 
 // Version tracking
-const String CODE_VERSION = "3.5.6";
+const String CODE_VERSION = "3.5.7";
 
 // Pin assignments for ItsyBitsy M4
 const int dacPin = A0;          // DAC output (12-bit, 0-4095)
@@ -70,15 +70,15 @@ int group_id = 0;           // This device's group ID (0 = inactive)
 int group_total = 0;        // Total number of groups in system
 float target_current_mA = 0; // Target current in mA
 int duration = 0;           // Duration for this group (in milliseconds)
-int current_group = 1;      // Currently active group (1-based)
+volatile int current_group = 1;      // Currently active group (1-based)
 bool program_success = false; // Master only: tracks program execution success
 
 // Current control variables
 float safe_current_mA = 0;      // 99% of target (safety margin)
-int current_dac_value = 0;      // Current DAC value during closeloop
+volatile int current_dac_value = 0;      // Current DAC value during closeloop
 float measured_current_mA = 0;  // Last measured current
-bool closeloop_active = false;  // Controls when closeloop runs (set by trigger interrupt)
-bool dac_output_active = false; // true iff DAC output > 0 has been applied
+volatile bool closeloop_active = false;  // Controls when closeloop runs (set by trigger interrupt)
+volatile bool dac_output_active = false; // true iff DAC output > 0 has been applied
 int last_current_state = 0;     // Tracks current state for userLedPin edge detection (0 or 1)
 int overcurrent_consecutive_count = 0;  // Tracks consecutive overcurrent readings (0-2)
 int conversion_miss_count = 0;          // Tracks consecutive INA226 conversion-not-ready events
@@ -90,10 +90,10 @@ int currentFrameLoop = 0;   // Current loop number in frame execution
 int totalLoops = 0;         // Total loops needed for all frames
 bool frameExecutionActive = false; // Flag to track if frame execution is running
 bool inPulsePhase = true;   // true = pulse active, false = interframe delay active
-bool emergencyShutdownActive = false; // Sticky flag: prevents trigger re-activation after emergency
+volatile bool emergencyShutdownActive = false; // Sticky flag: prevents trigger re-activation after emergency
 
 // Auto-Calibration variables (Phase 8)
-bool inCalibrationPhase = false;   // true during Frame_0, false during Frame_1+
+volatile bool inCalibrationPhase = false;   // true during Frame_0, false during Frame_1+
 
 // Healthcheck variables (master only)
 bool healthcheck_complete = false;      // true when healthcheck response received from chain
@@ -111,7 +111,7 @@ DeviceStatus deviceCache[MAX_DEVICES]; // Dynamic device cache based on totalDev
 
 // DAC control variables
 
-int last_adjusted_dac = 0;      // Stores last non-zero DAC value before pulse end (0 = not yet set)
+volatile int last_adjusted_dac = 0;      // Stores last non-zero DAC value before pulse end (0 = not yet set)
 
 // Timing variables
 unsigned long programStartTime = 0;
@@ -974,9 +974,6 @@ void handleProgramExecution()
                             break;
                         }
                     }
-                    Serial.print("FRAME_0: G_ID="); Serial.print(current_group);
-                    Serial.print(", I_TARGET="); Serial.print(groupCurrent);
-                    Serial.println("mA, CALIBRATED");
                 }
             }
             

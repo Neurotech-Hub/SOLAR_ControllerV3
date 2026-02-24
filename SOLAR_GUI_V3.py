@@ -4,7 +4,7 @@ SOLAR Controller V3 GUI
 A Python GUI application for controlling ItsyBitsy M4 boards with LED arrays and servo motors.
 """
 
-__version__ = "3.0.4"
+__version__ = "3.0.5"
 
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog
@@ -47,7 +47,6 @@ class SolarController:
         self.servo_angle_var = tk.IntVar(value=90)
         
         # LED control variables
-        self.led_target_mode = tk.StringVar(value="individual")  # default to individual
         self.led_device_var = tk.StringVar(value="001 - Device 1")
         self.group_total_var = tk.IntVar(value=1)
         self.group_id_var = tk.StringVar(value="1")
@@ -240,7 +239,7 @@ class SolarController:
         frame.grid(row=row, column=0, sticky=(tk.W, tk.E), pady=5)
         frame.columnconfigure(1, weight=1)
         
-        # Group configuration and target mode (Row 1)
+        # Group configuration (Row 1)
         group_frame = ttk.LabelFrame(frame, text="Group Configuration", padding="5")
         group_frame.grid(row=0, column=0, columnspan=4, sticky=(tk.W, tk.E), pady=5)
         
@@ -249,13 +248,7 @@ class SolarController:
                                            textvariable=self.group_total_var,
                                            width=10, command=self.update_group_id_list)
         self.group_total_spin.grid(row=0, column=1, padx=5, sticky=tk.W)
-        
-        ttk.Radiobutton(group_frame, text="All LEDs", variable=self.led_target_mode,
-                        value="all", command=self.update_led_device_state).grid(
-                            row=0, column=2, padx=10)
-        ttk.Radiobutton(group_frame, text="Individual", variable=self.led_target_mode,
-                        value="individual", command=self.update_led_device_state).grid(
-                            row=0, column=3, padx=5)
+        self.group_total_spin.bind('<KeyRelease>', lambda e: self.update_group_id_list())
         
         # Programming parameters section
         prog_param_frame = ttk.LabelFrame(frame, text="Programming Parameters", padding="5")
@@ -267,7 +260,7 @@ class SolarController:
         self.led_device_combo.grid(row=0, column=1, padx=5, sticky=tk.W)
         
         ttk.Label(prog_param_frame, text="Group ID:").grid(row=0, column=2, padx=5, sticky=tk.W)
-        self.group_id_combo = ttk.Combobox(prog_param_frame, textvariable=self.group_id_var, width=10)
+        self.group_id_combo = ttk.Combobox(prog_param_frame, textvariable=self.group_id_var, width=10, state="readonly")
         self.group_id_combo.grid(row=0, column=3, padx=5, sticky=tk.W)
         
         # Current and Exposure (Row 2 of programming parameters)
@@ -279,10 +272,9 @@ class SolarController:
         ttk.Spinbox(prog_param_frame, from_=10, to=1000000, 
                    textvariable=self.exposure_var, width=10).grid(row=1, column=3, padx=5, sticky=tk.W)
         
-        # Initialize dropdowns and states
+        # Initialize dropdowns
         self.update_led_device_list()
         self.update_group_id_list()
-        self.update_led_device_state()
         
         # Program button
         ttk.Button(frame, text="Program", command=self.send_program_command).grid(
@@ -585,11 +577,6 @@ class SolarController:
             messagebox.showerror("Invalid Group", f"Group ID must be between 1 and {group_total}")
             return
         
-        # Determine device id based on target mode
-        if self.led_target_mode.get() == "all":
-            device_id = "000"
-        else:
-            device_id = device_id
         # Format command with curly brackets
         command = f"{device_id},program,{{{group_id},{group_total},{current},{exposure}}}"
         self.send_command(command)
@@ -639,29 +626,31 @@ class SolarController:
     
     def update_led_device_list(self):
         """Update LED device dropdown list"""
-        devices = ["000 - All"]
+        devices = []
         total = self.total_devices.get()
         
         for i in range(1, total + 1):
             devices.append(f"{i:03d} - Device {i}")
         
         self.led_device_combo['values'] = devices
-        if self.led_target_mode.get() == "individual":
-            if total >= 1:
-                self.led_device_var.set("001 - Device 1")
-            else:
-                self.led_device_var.set("000 - All")
+        if total >= 1:
+            self.led_device_var.set("001 - Device 1")
         else:
-            self.led_device_var.set("000 - All")
+            self.led_device_var.set("")
     
     def update_group_id_list(self):
         """Update group ID dropdown based on group total"""
-        group_total = self.group_total_var.get()
-        group_ids = [str(i) for i in range(1, group_total + 1)]
+        try:
+            group_total = self.group_total_var.get()
+        except (tk.TclError, ValueError):
+            return
         
+        if group_total < 1:
+            group_total = 1
+        
+        group_ids = [str(i) for i in range(1, group_total + 1)]
         self.group_id_combo['values'] = group_ids
         
-        # Reset group_id if current value is out of range
         try:
             current_group_id = int(self.group_id_var.get())
             if current_group_id > group_total:
@@ -670,17 +659,14 @@ class SolarController:
             self.group_id_var.set("1")
 
     def update_led_device_state(self):
-        """Enable/disable LED device combo based on target mode"""
-        if self.led_target_mode.get() == "all":
-            self.led_device_combo.config(state="disabled")
-            self.led_device_var.set("000 - All")
+        """Enable/disable LED device combo and group fields"""
+        self.led_device_combo.config(state="readonly")
+        self.group_total_spin.config(state="normal")
+        self.group_id_combo.config(state="readonly")
+        if self.total_devices.get() >= 1:
+            self.led_device_var.set("001 - Device 1")
         else:
-            self.led_device_combo.config(state="readonly")
-            # Ensure a sensible default when switching to individual
-            if self.total_devices.get() >= 1:
-                self.led_device_var.set("001 - Device 1")
-            else:
-                self.led_device_var.set("000 - All")
+            self.led_device_var.set("")
     
     # Log Methods
     
