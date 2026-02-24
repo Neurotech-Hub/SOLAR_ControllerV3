@@ -6,7 +6,7 @@
 #include <Wire.h>
 
 // Version tracking
-const String CODE_VERSION = "3.5.3";
+const String CODE_VERSION = "3.5.5";
 
 // Pin assignments for ItsyBitsy M4
 const int dacPin = A0;          // DAC output (12-bit, 0-4095)
@@ -743,6 +743,11 @@ void triggerInterrupt()
             current_group++;
             if (current_group > group_total) {
                 current_group = 1;
+                // Auto-exit calibration after one full cycle through all groups
+                // This avoids race between serial calibration,end and hardware trigger
+                if (inCalibrationPhase) {
+                    inCalibrationPhase = false;
+                }
             }
         }
     }
@@ -1312,6 +1317,11 @@ void processCommand(String data)
         // Handle calibration mode command (for slave synchronization)
         else if (cmd.command == "calibration")
         {
+            if (isMasterDevice) {
+                // Master: consume returned calibration command (already handled in start command)
+                return;
+            }
+            // Slave: Process and forward to next device in chain
             if (cmd.value == "start") {
                 // CHECKPOINT: Verify INA226 before entering calibration (defense-in-depth)
                 if (!verifyINA226()) {
@@ -1325,22 +1335,23 @@ void processCommand(String data)
                 }
                 inCalibrationPhase = true;
                 emergencyShutdownActive = false;  // Clear emergency lockout - master is starting fresh
+                current_group = 1;  // Reset group tracking for fresh calibration
                 last_adjusted_dac = 0;  // Reset for fresh calibration
                 current_dac_value = dacCalibrationStart;  // Reset DAC to start value (1300)
                 dac_output_active = false;  // Reset DAC output tracking
                 dac_blind_start_ms = 0;  // Clear blind watchdog
                 overcurrent_consecutive_count = 0;  // Reset overcurrent counter
-                if (Serial && !isMasterDevice) {
+                if (Serial) {
                     Serial.println("DEBUG: INA226 checkpoint passed, slave entering calibration mode");
                 }
             } else if (cmd.value == "end") {
                 inCalibrationPhase = false;
-                if (Serial && !isMasterDevice) {
+                if (Serial) {
                     Serial.println("DEBUG: Slave exiting calibration mode - using normal DAC increment");
                 }
             }
-            // DO NOT FORWARD calibration commands - they're one-time broadcasts
-            return;  // Exit before forwarding logic to prevent infinite loop
+            Serial1.println(data);  // Forward to next device in chain
+            return;
         }
         // Handle servo command
         else if (cmd.command == "servo")
@@ -1356,8 +1367,7 @@ void processCommand(String data)
     }
 
     // Always forward unless we're master and it's our command returning
-    // OR it's a calibration command (already processed, don't loop)
-    if ((!isMasterDevice || (isMasterDevice && data != pendingCommand)) && cmd.command != "calibration")
+    if ((!isMasterDevice || (isMasterDevice && data != pendingCommand)))
     {
         if (Serial && !isMasterDevice)
         {
