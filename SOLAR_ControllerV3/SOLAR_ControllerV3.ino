@@ -6,7 +6,7 @@
 #include <Wire.h>
 
 // Version tracking
-const String CODE_VERSION = "3.5.5";
+const String CODE_VERSION = "3.5.6";
 
 // Pin assignments for ItsyBitsy M4
 const int dacPin = A0;          // DAC output (12-bit, 0-4095)
@@ -847,8 +847,6 @@ void handleCurrentControl() {
                 // First over-threshold reading - log warning
                 Serial.println("WARNING: Overcurrent detected (reading #1): " + 
                               String(measured_current_mA) + "mA on device " + String(myDeviceId));
-                Serial.println("WARNING: Threshold: " + String(maxCurrent_mA) + 
-                              "mA - Monitoring for consecutive reading");
             } else if (overcurrent_consecutive_count >= overcurrent_consecutive_count_limit) {
                 // Consecutive over-threshold confirmed - FULL EMERGENCY SHUTDOWN
                 Serial.println("EMERGENCY: Current exceeded " + String(maxCurrent_mA) + 
@@ -944,19 +942,31 @@ void handleProgramExecution()
     if (millis() - programStartTime >= programDuration) {
         
         if (inPulsePhase) {
-            // Pulse phase complete - end the pulse
+            // === PULSE PHASE COMPLETE ===
             
+            // Evaluate conditions and save DAC BEFORE trigger change (ISR will modify closeloop_active)
+            bool calMasterActive = inCalibrationPhase && (group_id == current_group && group_id > 0 && current_dac_value > 0);
+            bool normalMasterActive = !inCalibrationPhase && (group_id == current_group && group_id > 0 && current_dac_value > 0 && closeloop_active);
+            
+            if (calMasterActive || normalMasterActive) {
+                last_adjusted_dac = current_dac_value;
+            }
+            
+            // IMMEDIATE: Drive trigger HIGH with near-zero latency
+            digitalWrite(triggerOutPin, HIGH);
+            
+            inPulsePhase = false;
+            programStartTime = millis();
+            programDuration = interframeDelay;
+            
+            // DEFERRED: Log calibration result (after trigger edge, non-time-critical)
             if (inCalibrationPhase) {
-                // Frame_0: Calibration pulse complete
-                // Master: Store calibrated DAC value and log results
-                if (group_id == current_group && group_id > 0 && current_dac_value > 0) {
-                    last_adjusted_dac = current_dac_value;  // Store calibrated DAC
-                    
-                    // Log calibration result with measured current
-                    Serial.println("FRAME_0: G_ID=" + String(current_group) + 
-                                  ", I=" + String(measured_current_mA) + "mA, DAC=" + String(current_dac_value) + ", CALIBRATED");
+                if (calMasterActive) {
+                    Serial.print("FRAME_0: G_ID="); Serial.print(current_group);
+                    Serial.print(", I="); Serial.print(measured_current_mA);
+                    Serial.print("mA, DAC="); Serial.print(current_dac_value);
+                    Serial.println(", CALIBRATED");
                 } else {
-                    // Slave devices or non-active groups - just log target
                     float groupCurrent = 0;
                     for (int i = 0; i < totalDevices && i < MAX_DEVICES; i++) {
                         if (deviceCache[i].isSet && deviceCache[i].group_id == current_group) {
@@ -964,57 +974,33 @@ void handleProgramExecution()
                             break;
                         }
                     }
-                    Serial.println("FRAME_0: G_ID=" + String(current_group) + ", I_TARGET=" + String(groupCurrent) + "mA, CALIBRATED");
-                }
-            } else {
-                // Frame_1+: Normal pulse complete
-                // Master: Record DAC value before ending pulse if active in current group
-                if (group_id == current_group && group_id > 0 && current_dac_value > 0 && closeloop_active) {
-                    last_adjusted_dac = current_dac_value;
+                    Serial.print("FRAME_0: G_ID="); Serial.print(current_group);
+                    Serial.print(", I_TARGET="); Serial.print(groupCurrent);
+                    Serial.println("mA, CALIBRATED");
                 }
             }
             
-            digitalWrite(triggerOutPin, HIGH);
-            
-            // Switch to interframe delay phase
-            inPulsePhase = false;
-            programStartTime = millis();
-            programDuration = interframeDelay;
-            
         } else {
-            // Interframe delay complete - check if we need to continue
+            // === INTERFRAME DELAY COMPLETE ===
             currentFrameLoop++;
             
+            bool justFinishedCalibration = false;
+            
             if (inCalibrationPhase) {
-                // Frame_0: Check if calibration complete for all groups
                 if (currentFrameLoop >= group_total) {
-                    // Frame_0 complete - transition to Frame_1
-                    Serial.println("FRAME_0: Calibration Complete");
-                    
-                    // CRITICAL: Broadcast calibration end to ALL slave devices
-                    Serial1.println("000,calibration,end");
-                    // Serial.println("DEBUG: Broadcasted calibration end to all slave devices");
-                    
+                    justFinishedCalibration = true;
                     inCalibrationPhase = false;
-                    currentFrameLoop = 1;  // Start Frame_1
-                    
-                    // Calculate total loops for user frames
+                    currentFrameLoop = 1;
                     totalLoops = frameCount * group_total;
-                    // Serial.println("DEBUG: Starting user frames - Total loops: " + String(totalLoops));
-                    
-                    // Continue to next group for Frame_1
                 }
             } else {
-                // Frame_1+: Check if all user frames complete
                 if (currentFrameLoop > totalLoops) {
-                    // All frames complete
-                    digitalWrite(triggerOutPin, HIGH);
-                    Serial.println("DEBUG: All frames complete, final TRIGGER_OUT HIGH sent");
-                    
+                    // All frames complete (trigger already HIGH from previous pulse end)
                     program_success = true;
                     frameExecutionActive = false;
                     programDuration = 0;
-                    Serial.println("PROGRAM_ACK:" + String(program_success ? "true" : "false"));
+                    Serial.println("DEBUG: All frames complete, final TRIGGER_OUT HIGH sent");
+                    Serial.println("PROGRAM_ACK:true");
                     return;
                 }
             }
@@ -1028,7 +1014,38 @@ void handleProgramExecution()
             // Get group-specific settings for current group
             int groupExposure;
             if (getGroupSettings(current_group, groupExposure)) {
-                // Get target current for this group from cache
+                // Determine pulse duration BEFORE trigger (fast, no I/O)
+                if (inCalibrationPhase) {
+                    programDuration = calibrationDuration;
+                } else {
+                    programDuration = groupExposure;
+                }
+                
+                // IMMEDIATE: Drive trigger LOW with near-zero latency
+                inPulsePhase = true;
+                digitalWrite(triggerOutPin, LOW);
+                programStartTime = millis();
+                
+                // Activate closeloop (time-critical, minimal code)
+                if (current_group == group_id && group_id > 0) {
+                    if (inCalibrationPhase) {
+                        current_dac_value = dacCalibrationStart;
+                    } else if (last_adjusted_dac > 0 && last_adjusted_dac != dacMax) {
+                        current_dac_value = last_adjusted_dac;
+                    }
+                    else {
+                        current_dac_value = dacCalibrationStart;
+                    }
+                    closeloop_active = true;
+                }
+                
+                // DEFERRED: Calibration complete broadcast (safe - slaves auto-detect via trigger cycle)
+                if (justFinishedCalibration) {
+                    Serial.println("FRAME_0: Calibration Complete");
+                    Serial1.println("000,calibration,end");
+                }
+                
+                // DEFERRED: Log frame start (after trigger edge, non-time-critical)
                 float groupCurrent = 0;
                 for (int i = 0; i < totalDevices && i < MAX_DEVICES; i++) {
                     if (deviceCache[i].isSet && deviceCache[i].group_id == current_group) {
@@ -1038,40 +1055,20 @@ void handleProgramExecution()
                 }
                 
                 if (inCalibrationPhase) {
-                    // Frame_0: Log calibration start for next group
-                    Serial.println("FRAME_0: G_ID=" + String(current_group) + ", I_TARGET=" + String(groupCurrent) + "mA");
-                    programDuration = calibrationDuration;  // Use calibration duration
+                    Serial.print("FRAME_0: G_ID="); Serial.print(current_group);
+                    Serial.print(", I_TARGET="); Serial.print(groupCurrent);
+                    Serial.println("mA");
                 } else {
-                    // Frame_1+: Log normal frame start
                     int currentFrame = ((currentFrameLoop - 1) / group_total) + 1;
-                    Serial.println("FRAME_" + String(currentFrame) + ": G_ID=" + String(current_group) + 
-                                  ", I=" + String(groupCurrent) + "mA, EXP=" + String(groupExposure) + "ms");
-                    programDuration = groupExposure;  // Use programmed exposure
-                }
-                
-                // Start the next pulse
-                inPulsePhase = true;
-                programStartTime = millis();
-                
-                // Drive TRIGGER_OUT LOW to start the next pulse
-                digitalWrite(triggerOutPin, LOW);
-                
-                // Master activates closeloop immediately after driving trigger LOW
-                if (current_group == group_id && group_id > 0) {
-                    if (inCalibrationPhase) {
-                        // Frame_0: Start from calibration DAC
-                        current_dac_value = dacCalibrationStart;
-                    } else if (last_adjusted_dac > 0 && last_adjusted_dac != dacMax) {
-                        // Frame_1+: Use last frame's DAC (includes Frame_0 calibration)
-                        current_dac_value = last_adjusted_dac;
-                    }
-                    else {
-                        current_dac_value = dacCalibrationStart;
-                    }
-                    closeloop_active = true;  // Enable closeloop
+                    Serial.print("FRAME_"); Serial.print(currentFrame);
+                    Serial.print(": G_ID="); Serial.print(current_group);
+                    Serial.print(", I="); Serial.print(groupCurrent);
+                    Serial.print("mA, EXP="); Serial.print(groupExposure);
+                    Serial.println("ms");
                 }
             } else {
-                Serial.println("ERROR: No devices programmed for group " + String(current_group));
+                Serial.print("ERROR: No devices programmed for group ");
+                Serial.println(current_group);
                 frameExecutionActive = false;
                 programDuration = 0;
             }

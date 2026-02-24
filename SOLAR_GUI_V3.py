@@ -4,7 +4,7 @@ SOLAR Controller V3 GUI
 A Python GUI application for controlling ItsyBitsy M4 boards with LED arrays and servo motors.
 """
 
-__version__ = "3.0.2"
+__version__ = "3.0.4"
 
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog
@@ -52,7 +52,7 @@ class SolarController:
         self.group_total_var = tk.IntVar(value=1)
         self.group_id_var = tk.StringVar(value="1")
         self.current_var = tk.IntVar(value=0)
-        self.exposure_var = tk.IntVar(value=20)
+        self.exposure_var = tk.IntVar(value=10)
         self.frame_count_var = tk.IntVar(value=10)
         self.interframe_delay_var = tk.IntVar(value=10)
         
@@ -76,17 +76,19 @@ class SolarController:
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
-        # Configure grid weights for two-column layout
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(0, weight=1)  # Left column (controls)
-        main_frame.columnconfigure(1, weight=1)  # Right column (log)
-        main_frame.rowconfigure(0, weight=1)     # Allow vertical expansion
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.rowconfigure(0, weight=1)
+        
+        # Horizontal paned window for resizable split between controls and log
+        paned = ttk.PanedWindow(main_frame, orient=tk.HORIZONTAL)
+        paned.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         # Left side container for controls
-        left_frame = ttk.Frame(main_frame)
-        left_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 5))
+        left_frame = ttk.Frame(paned)
         left_frame.columnconfigure(0, weight=1)
+        paned.add(left_frame, weight=3)
         
         # Create control sections on left side
         row = 0
@@ -103,7 +105,11 @@ class SolarController:
         row += 1
         
         # Right side - Communication Log
-        self.create_communication_log_section(main_frame, 0)  # Spans full height on right
+        right_frame = ttk.Frame(paned)
+        right_frame.columnconfigure(0, weight=1)
+        right_frame.rowconfigure(0, weight=1)
+        paned.add(right_frame, weight=1)
+        self.create_communication_log_section(right_frame)
     
     def create_serial_section(self, parent, row):
         """Create Serial Connection section"""
@@ -306,10 +312,10 @@ class SolarController:
         style.configure('Execute.TButton', font=('Arial', 12, 'bold'))
         execute_button.configure(style='Execute.TButton')
     
-    def create_communication_log_section(self, parent, row):
+    def create_communication_log_section(self, parent):
         """Create Communication Log section"""
         frame = ttk.LabelFrame(parent, text="Communication Log", padding="10")
-        frame.grid(row=row, column=1, rowspan=10, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5, padx=(5, 0))
+        frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5, padx=(5, 0))
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(1, weight=1)
         
@@ -327,7 +333,7 @@ class SolarController:
                   command=self.export_log).grid(row=0, column=2, padx=5)
         
         # Log text area
-        self.log_text = scrolledtext.ScrolledText(frame, height=15, width=80, wrap=tk.WORD)
+        self.log_text = scrolledtext.ScrolledText(frame, height=15, width=60, wrap=tk.WORD)
         self.log_text.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         self.log_text.config(state=tk.DISABLED)
         
