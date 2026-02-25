@@ -285,7 +285,7 @@ class SolarController:
         frame_config_frame.grid(row=3, column=0, columnspan=4, sticky=(tk.W, tk.E), pady=5)
         
         ttk.Label(frame_config_frame, text="Frame Count:").grid(row=0, column=0, padx=5, sticky=tk.W)
-        ttk.Spinbox(frame_config_frame, from_=1, to=1000, 
+        ttk.Spinbox(frame_config_frame, from_=1, to=1000000, 
                    textvariable=self.frame_count_var, width=10).grid(row=0, column=1, padx=5, sticky=tk.W)
         
         ttk.Label(frame_config_frame, text="Interframe Delay (ms):").grid(row=0, column=2, padx=5, sticky=tk.W)
